@@ -1,0 +1,5 @@
+{
+  "name": "Otama Warehouse System",
+  "description": "A comprehensive warehouse management system for processing and picking operations, featuring real-time status tracking and multi-role views.",
+  "requestFramePermissions": []
+}

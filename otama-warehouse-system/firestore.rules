@@ -1,0 +1,110 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {userId}
+// Fields:
+//   - uid: string (required)
+//   - email: string (required)
+//   - displayName: string
+//   - photoURL: string
+//   - role: string (required, 'admin' or 'staff')
+//
+// Collection: products
+// Document ID: {productId}
+// Fields:
+//   - sku: string (required)
+//   - name: string (required)
+//   - category: string (required)
+//
+// Collection: ticketsA
+// Document ID: {date} (YYYY-MM-DD)
+// Fields:
+//   - sends: list (array of SendOperation objects)
+//   - receives: map (workshop -> list of ReceiveOperation objects)
+//
+// Collection: ticketsB
+// Document ID: {date} (YYYY-MM-DD)
+// Fields:
+//   - items: list (array of TicketBItem objects)
+//
+// Collection: settings
+// Document ID: {settingId}
+// Fields:
+//   - workshops: list (array of strings)
+//   - types: list (array of strings)
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (request.auth.token.email == "trungg9870@gmail.com" && request.auth.token.email_verified == true);
+    }
+
+    function isStaff() {
+      return isAuthenticated();
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['sku', 'name', 'category']) &&
+             data.sku is string && data.sku.size() > 0 && data.sku.size() < 50 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+             data.category is string && data.category.size() > 0 && data.category.size() < 100;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role']) &&
+             data.uid is string && data.email is string &&
+             data.role in ['admin', 'manager', 'staff'];
+    }
+
+    function isValidSettings(data) {
+      return data.keys().hasAll(['workshops', 'types']) &&
+             data.workshops is list && data.types is list;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /products/{productId} {
+      allow read: if isStaff();
+      allow write: if isAdmin() && isValidProduct(request.resource.data);
+    }
+
+    match /ticketsA/{date} {
+      allow read: if isStaff();
+      allow write: if isStaff();
+    }
+
+    match /ticketsB/{date} {
+      allow read: if isStaff();
+      allow write: if isStaff();
+    }
+
+    match /settings/{settingId} {
+      allow read: if isStaff();
+      allow write: if isAdmin() && isValidSettings(request.resource.data);
+    }
+  }
+}

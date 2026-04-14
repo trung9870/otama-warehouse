@@ -1,0 +1,76 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "Master product information",
+      "type": "object",
+      "properties": {
+        "sku": { "type": "string", "description": "Unique SKU" },
+        "name": { "type": "string", "description": "Product name" },
+        "category": { "type": "string", "description": "Product category" }
+      },
+      "required": ["sku", "name", "category"]
+    },
+    "TicketA": {
+      "title": "Ticket A",
+      "description": "Daily operations for Warehouse A",
+      "type": "object",
+      "properties": {
+        "sends": { "type": "array", "description": "List of send operations" },
+        "receives": { "type": "object", "description": "Map of receives per workshop" }
+      }
+    },
+    "TicketB": {
+      "title": "Ticket B",
+      "description": "Daily operations for Warehouse B",
+      "type": "object",
+      "properties": {
+        "items": { "type": "array", "description": "List of items in the ticket" }
+      }
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile and role",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "manager", "staff"] }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Settings": {
+      "title": "System Settings",
+      "description": "Global configuration for workshops and types",
+      "type": "object",
+      "properties": {
+        "workshops": { "type": "array", "items": { "type": "string" } },
+        "types": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and permissions"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Master list of products"
+    },
+    "/ticketsA/{date}": {
+      "schema": "TicketA",
+      "description": "Daily operations for Warehouse A"
+    },
+    "/ticketsB/{date}": {
+      "schema": "TicketB",
+      "description": "Daily operations for Warehouse B"
+    },
+    "/settings/{settingId}": {
+      "schema": "Settings",
+      "description": "System-wide configuration"
+    }
+  }
+}
