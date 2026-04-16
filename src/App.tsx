@@ -696,7 +696,7 @@ export default function App() {
                     loginMode === 'staff' ? "bg-white shadow-sm text-blue-600" : "text-gray-500"
                   )}
                 >
-                  Nhân viên
+                  Người dùng
                 </button>
                 <button 
                   onClick={() => setLoginMode('admin')}
@@ -705,7 +705,7 @@ export default function App() {
                     loginMode === 'admin' ? "bg-white shadow-sm text-blue-600" : "text-gray-500"
                   )}
                 >
-                  Quản lý
+                  Admin
                 </button>
               </div>
 
@@ -738,20 +738,20 @@ export default function App() {
                     disabled={isLoggingIn}
                     className="w-full py-4 bg-blue-600 text-white font-bold rounded-2xl shadow-lg shadow-blue-100 hover:bg-blue-700 active:scale-[0.98] transition-all disabled:opacity-50"
                   >
-                    {isLoggingIn ? "Đang kiểm tra..." : "Đăng nhập hệ thống"}
+                    {isLoggingIn ? "Đang kiểm tra..." : "Đăng nhập Người dùng"}
                   </button>
                 </form>
               ) : (
                 <div className="space-y-4">
                   <p className="text-xs text-gray-500 text-center leading-relaxed">
-                    Chế độ dành riêng cho quản trị viên chính. Vui lòng đăng nhập bằng tài khoản Google đã được cấp quyền.
+                    Chế độ dành riêng cho Admin hệ thống. Vui lòng đăng nhập bằng tài khoản Google đã được cấp quyền.
                   </p>
                   <button 
                     onClick={login}
                     className="w-full py-4 bg-white border-2 border-gray-100 flex items-center justify-center gap-3 font-bold rounded-2xl hover:bg-gray-50 active:scale-[0.98] transition-all"
                   >
                     <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
-                    Đăng nhập Google
+                    Đăng nhập Google (Admin)
                   </button>
                 </div>
               )}
