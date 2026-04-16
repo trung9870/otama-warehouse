@@ -6,7 +6,7 @@ export const DESTINATIONS = ["Về A", "A Triều", "Bích", "Thảo"];
 
 export const STAFF_LIST = ["Hùng", "Minh", "Tuấn"];
 
-export const REAL_TODAY = "2026-04-07";
+export const REAL_TODAY = new Date().toISOString().split("T")[0];
 
 export const formatDate = (iso: string) => {
   const [y, m, d] = iso.split("-");

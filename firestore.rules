@@ -9,10 +9,10 @@
 //   - email: string (required)
 //   - displayName: string
 //   - photoURL: string
-//   - role: string (required, 'admin' or 'staff')
+//   - role: string (required, 'admin', 'manager', 'staff')
 //
 // Collection: products
-// Document ID: {productId}
+// Document ID: {productId} (sku)
 // Fields:
 //   - sku: string (required)
 //   - name: string (required)
@@ -30,7 +30,7 @@
 //   - items: list (array of TicketBItem objects)
 //
 // Collection: settings
-// Document ID: {settingId}
+// Document ID: global
 // Fields:
 //   - workshops: list (array of strings)
 //   - types: list (array of strings)
@@ -51,7 +51,13 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
-        (request.auth.token.email == "trungg9870@gmail.com" && request.auth.token.email_verified == true);
+        (request.auth.token.email == "trungg9870@gmail.com" || 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+    }
+
+    function isManager() {
+      return isAuthenticated() &&
+        (isAdmin() || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'manager');
     }
 
     function isStaff() {
@@ -60,9 +66,9 @@ service cloud.firestore {
 
     function isValidProduct(data) {
       return data.keys().hasAll(['sku', 'name', 'category']) &&
-             data.sku is string && data.sku.size() > 0 && data.sku.size() < 50 &&
-             data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
-             data.category is string && data.category.size() > 0 && data.category.size() < 100;
+             data.sku is string && data.sku.size() > 0 && data.sku.size() < 100 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 500 &&
+             data.category is string && data.category.size() > 0 && data.category.size() < 200;
     }
 
     function isValidUser(data) {
@@ -81,15 +87,16 @@ service cloud.firestore {
     // ===============================================================
 
     match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
-      allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow get: if isAuthenticated();
+      allow list: if isAdmin();
+      allow create: if isAuthenticated() && (request.auth.uid == userId || isAdmin()) && isValidUser(request.resource.data);
+      allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin()) && isValidUser(request.resource.data);
       allow delete: if isAdmin();
     }
 
     match /products/{productId} {
       allow read: if isStaff();
-      allow write: if isAdmin() && isValidProduct(request.resource.data);
+      allow write: if isManager() && isValidProduct(request.resource.data);
     }
 
     match /ticketsA/{date} {

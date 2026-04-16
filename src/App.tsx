@@ -191,89 +191,170 @@ export default function App() {
     }
   }, [settings.workshops, state.products.length]);
 
+  // --- Error Handling ---
+  enum OperationType {
+    CREATE = 'create',
+    UPDATE = 'update',
+    DELETE = 'delete',
+    LIST = 'list',
+    GET = 'get',
+    WRITE = 'write',
+  }
+
+  interface FirestoreErrorInfo {
+    error: string;
+    operationType: OperationType;
+    path: string | null;
+    authInfo: {
+      userId: string | undefined;
+      email: string | null | undefined;
+      emailVerified: boolean | undefined;
+      isAnonymous: boolean | undefined;
+      tenantId: string | null | undefined;
+      providerInfo: {
+        providerId: string;
+        displayName: string | null;
+        email: string | null;
+        photoUrl: string | null;
+      }[];
+    }
+  }
+
+  const handleFirestoreError = (error: unknown, operationType: OperationType, path: string | null) => {
+    const errInfo: FirestoreErrorInfo = {
+      error: error instanceof Error ? error.message : String(error),
+      authInfo: {
+        userId: auth.currentUser?.uid,
+        email: auth.currentUser?.email,
+        emailVerified: auth.currentUser?.emailVerified,
+        isAnonymous: auth.currentUser?.isAnonymous,
+        tenantId: auth.currentUser?.tenantId,
+        providerInfo: auth.currentUser?.providerData.map(provider => ({
+          providerId: provider.providerId,
+          displayName: provider.displayName,
+          email: provider.email,
+          photoUrl: provider.photoURL
+        })) || []
+      },
+      operationType,
+      path
+    };
+    console.error('Firestore Error: ', JSON.stringify(errInfo));
+    
+    if (errInfo.error.toLowerCase().includes("permission")) {
+      showToast("Bạn không có quyền thực hiện hành động này!");
+    } else {
+      showToast("Lỗi hệ thống!");
+    }
+    
+    throw new Error(JSON.stringify(errInfo));
+  };
+
   // --- Firebase Sync ---
   useEffect(() => {
     let unsubProfile: (() => void) | null = null;
-    let unsubAllUsers: (() => void) | null = null;
+    let unsubProducts: (() => void) | null = null;
+    let unsubTicketsA: (() => void) | null = null;
+    let unsubTicketsB: (() => void) | null = null;
+    let unsubSettings: (() => void) | null = null;
 
     const unsubAuth = onAuthStateChanged(auth, async (u) => {
       setUser(u);
+      
+      // Clean up existing listeners
+      if (unsubProfile) { unsubProfile(); unsubProfile = null; }
+      if (unsubProducts) { unsubProducts(); unsubProducts = null; }
+      if (unsubTicketsA) { unsubTicketsA(); unsubTicketsA = null; }
+      if (unsubTicketsB) { unsubTicketsB(); unsubTicketsB = null; }
+      if (unsubSettings) { unsubSettings(); unsubSettings = null; }
+
       if (u) {
         // Check if profile exists, if not create as staff
         const userRef = doc(db, 'users', u.uid);
-        const userSnap = await getDoc(userRef);
-        
-        if (!userSnap.exists()) {
-          const newProfile: UserProfile = {
-            uid: u.uid,
-            email: u.email || '',
-            displayName: u.displayName || '',
-            photoURL: u.photoURL || '',
-            role: u.email === 'trungg9870@gmail.com' ? 'admin' : 'staff'
-          };
-          await setDoc(userRef, newProfile);
-        }
-
-        // Listen to own profile
-        unsubProfile = onSnapshot(userRef, (snap) => {
-          if (snap.exists()) {
-            setUserProfile(snap.data() as UserProfile);
+        try {
+          const userSnap = await getDoc(userRef);
+          
+          if (!userSnap.exists()) {
+            const newProfile: UserProfile = {
+              uid: u.uid,
+              email: u.email || '',
+              displayName: u.displayName || '',
+              photoURL: u.photoURL || '',
+              role: u.email === 'trungg9870@gmail.com' ? 'admin' : 'staff'
+            };
+            await setDoc(userRef, newProfile);
           }
-        });
+
+          // Listen to own profile
+          unsubProfile = onSnapshot(userRef, (snap) => {
+            if (snap.exists()) {
+              setUserProfile(snap.data() as UserProfile);
+            }
+          }, (err) => {
+            handleFirestoreError(err, OperationType.GET, `users/${u.uid}`);
+          });
+
+          // Sync Products
+          unsubProducts = onSnapshot(collection(db, 'products'), (snap) => {
+            const prods = snap.docs.map(d => d.data() as Product);
+            setState(prev => ({ ...prev, products: prods }));
+          }, (err) => {
+            handleFirestoreError(err, OperationType.LIST, 'products');
+          });
+
+          // Sync Tickets A
+          unsubTicketsA = onSnapshot(collection(db, 'ticketsA'), (snap) => {
+            const tickets: Record<string, TicketA> = {};
+            snap.docs.forEach(d => { tickets[d.id] = d.data() as TicketA; });
+            setState(prev => ({ ...prev, ticketsA: { ...prev.ticketsA, ...tickets } }));
+          }, (err) => {
+            handleFirestoreError(err, OperationType.LIST, 'ticketsA');
+          });
+
+          // Sync Tickets B
+          unsubTicketsB = onSnapshot(collection(db, 'ticketsB'), (snap) => {
+            const tickets: Record<string, TicketB> = {};
+            snap.docs.forEach(d => { tickets[d.id] = d.data() as TicketB; });
+            setState(prev => ({ ...prev, ticketsB: { ...prev.ticketsB, ...tickets } }));
+          }, (err) => {
+            handleFirestoreError(err, OperationType.LIST, 'ticketsB');
+          });
+
+          // Sync Settings
+          unsubSettings = onSnapshot(doc(db, 'settings', 'global'), (snap) => {
+            if (snap.exists()) {
+              setSettings(snap.data() as any);
+            } else {
+              // Initialize settings if not exists (only if admin)
+              if (u.email === 'trungg9870@gmail.com') {
+                setDoc(doc(db, 'settings', 'global'), {
+                  workshops: WORKSHOPS,
+                  types: TYPES
+                }).catch(err => handleFirestoreError(err, OperationType.WRITE, 'settings/global'));
+              }
+            }
+          }, (err) => {
+            handleFirestoreError(err, OperationType.GET, 'settings/global');
+          });
+
+        } catch (err) {
+          console.error("Error initializing user data:", err);
+        }
       } else {
         setUserProfile(null);
-        if (unsubProfile) unsubProfile();
       }
       setIsAuthReady(true);
     });
 
-    // Sync Products
-    const unsubProducts = onSnapshot(collection(db, 'products'), (snap) => {
-      const prods = snap.docs.map(d => d.data() as Product);
-      setState(prev => ({ ...prev, products: prods }));
-    }, (err) => {
-      console.error("Products sync error:", err);
-    });
-
-    // Sync Tickets A
-    const unsubTicketsA = onSnapshot(collection(db, 'ticketsA'), (snap) => {
-      const tickets: Record<string, TicketA> = {};
-      snap.docs.forEach(d => { tickets[d.id] = d.data() as TicketA; });
-      setState(prev => ({ ...prev, ticketsA: { ...prev.ticketsA, ...tickets } }));
-    });
-
-    // Sync Tickets B
-    const unsubTicketsB = onSnapshot(collection(db, 'ticketsB'), (snap) => {
-      const tickets: Record<string, TicketB> = {};
-      snap.docs.forEach(d => { tickets[d.id] = d.data() as TicketB; });
-      setState(prev => ({ ...prev, ticketsB: { ...prev.ticketsB, ...tickets } }));
-    });
-
-    // Sync Settings
-    const unsubSettings = onSnapshot(doc(db, 'settings', 'global'), (snap) => {
-      if (snap.exists()) {
-        setSettings(snap.data() as any);
-      } else {
-        // Initialize settings if not exists
-        if (isAdmin) {
-          setDoc(doc(db, 'settings', 'global'), {
-            workshops: WORKSHOPS,
-            types: TYPES
-          });
-        }
-      }
-    });
-
     return () => {
       unsubAuth();
-      unsubProducts();
-      unsubTicketsA();
-      unsubTicketsB();
-      unsubSettings();
       if (unsubProfile) unsubProfile();
-      if (unsubAllUsers) unsubAllUsers();
+      if (unsubProducts) unsubProducts();
+      if (unsubTicketsA) unsubTicketsA();
+      if (unsubTicketsB) unsubTicketsB();
+      if (unsubSettings) unsubSettings();
     };
-  }, [isAdmin]);
+  }, []);
 
   useEffect(() => {
     if (isDarkMode) {
@@ -404,7 +485,7 @@ export default function App() {
       await setDoc(doc(db, 'users', u.uid), { ...u, role: newRole });
       showToast(`Đã đổi quyền ${u.displayName} thành ${newRole === 'manager' ? 'Quản lý' : 'Nhân viên'}`);
     } catch (err) {
-      showToast("Lỗi đổi quyền!");
+      handleFirestoreError(err, OperationType.WRITE, `users/${u.uid}`);
     }
   };
 
@@ -442,13 +523,7 @@ export default function App() {
             await batch.commit();
           }
         } catch (error) {
-          console.error("Error persisting to Firestore:", error);
-          // If it's a permission error, it's likely because the user is not an admin
-          if (error instanceof Error && error.message.includes("permissions")) {
-            showToast("Bạn không có quyền lưu dữ liệu này!");
-          } else {
-            showToast("Lỗi lưu dữ liệu!");
-          }
+          handleFirestoreError(error, OperationType.WRITE, 'multiple');
         }
       })();
 
@@ -2235,10 +2310,10 @@ export default function App() {
       <AnimatePresence>
         {toast && (
           <motion.div 
-            initial={{ opacity: 0, y: 50, x: "-50%" }}
-            animate={{ opacity: 1, y: 0, x: "-50%" }}
-            exit={{ opacity: 0, y: 50, x: "-50%" }}
-            className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white px-6 py-3 rounded-2xl text-sm font-bold shadow-2xl flex items-center gap-3 min-w-[280px]"
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 50 }}
+            className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[9999] bg-gray-900 text-white px-6 py-3 rounded-2xl text-sm font-bold shadow-2xl flex items-center gap-3 min-w-[280px] max-w-[90vw] text-center justify-center"
           >
             <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
             {toast}
@@ -2967,31 +3042,63 @@ export default function App() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                 <input 
                   type="text" 
-                  placeholder="Gõ tên mẫu..."
+                  placeholder="Gõ tên mẫu để tìm..."
                   value={productSearch}
                   onChange={(e) => setProductSearch(e.target.value)}
                   className="w-full pl-10 pr-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-xl text-sm focus:bg-white focus:border-blue-500 focus:outline-none transition-all"
                 />
               </div>
-              {productSearch && (
-                <div className="max-h-40 overflow-y-auto border rounded-xl divide-y bg-white shadow-sm">
-                  {state.products.filter(p => p.name.toLowerCase().includes(productSearch.toLowerCase())).map(p => (
-                    <button 
-                      key={p.sku}
-                      onClick={() => {
-                        setFormProductSku(p.sku);
-                        setProductSearch("");
-                      }}
-                      className={cn(
-                        "w-full text-left px-4 py-3 text-xs font-medium hover:bg-blue-50 transition-colors",
-                        formProductSku === p.sku && "bg-blue-50 text-blue-700 font-bold"
+              <div className="max-h-48 overflow-y-auto border rounded-xl divide-y bg-white shadow-sm mt-2">
+                {(() => {
+                  const filtered = state.products.filter(p => 
+                    p.name.toLowerCase().includes(productSearch.toLowerCase()) ||
+                    p.sku.toLowerCase().includes(productSearch.toLowerCase())
+                  );
+                  
+                  if (filtered.length === 0) {
+                    return (
+                      <div className="p-8 text-center">
+                        <Package className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+                        <p className="text-xs text-gray-400 font-medium">
+                          {productSearch ? "Không tìm thấy sản phẩm nào" : "Chưa có sản phẩm nào trong kho"}
+                        </p>
+                      </div>
+                    );
+                  }
+
+                  // Show all if no search, or filtered results
+                  const displayList = productSearch ? filtered : filtered.slice(0, 10);
+
+                  return (
+                    <>
+                      {!productSearch && filtered.length > 10 && (
+                        <div className="px-4 py-2 bg-gray-50 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b">
+                          Top 10 sản phẩm gần đây
+                        </div>
                       )}
-                    >
-                      {p.name}
-                    </button>
-                  ))}
-                </div>
-              )}
+                      {displayList.map(p => (
+                        <button 
+                          key={p.sku}
+                          onClick={() => {
+                            setFormProductSku(p.sku);
+                            setProductSearch("");
+                          }}
+                          className={cn(
+                            "w-full text-left px-4 py-4 text-xs font-medium hover:bg-blue-50 transition-colors flex items-center justify-between group",
+                            formProductSku === p.sku && "bg-blue-50 text-blue-700 font-bold"
+                          )}
+                        >
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-sm text-gray-900 group-hover:text-blue-700">{p.name}</span>
+                            <span className="text-[10px] text-gray-400 uppercase">{p.category} · {p.sku}</span>
+                          </div>
+                          <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-blue-400" />
+                        </button>
+                      ))}
+                    </>
+                  );
+                })()}
+              </div>
               {formProductSku && (
                 <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl flex items-center justify-between">
                   <div className="flex items-center gap-2">
