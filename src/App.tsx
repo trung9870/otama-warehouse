@@ -26,7 +26,8 @@ import {
   ListChecks,
   Webhook,
   MessageSquare,
-  Send
+  Send,
+  Settings
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
@@ -688,16 +689,14 @@ export default function App() {
       snapshot.docChanges().forEach((change) => {
         if (change.type === "added") {
           const data = change.doc.data();
-          // Don't notify the sender themselves (they already got showToast)
-          if (data.fromUid !== user.uid) {
-            // Check if the timestamp is very recent (within last 30 seconds)
-            // This prevents "bursts" of old notifications on load
-            const now = Date.now();
-            const msgTime = data.timestamp?.toMillis ? data.timestamp.toMillis() : now;
-            
-            if (now - msgTime < 30000) {
-              showToast(`Thông báo: ${data.body}`);
-            }
+          // For testing, we remove the self-UID check so you can test across devices with same account.
+          // In production, you might want to re-enable: if (data.fromUid !== user.uid)
+          
+          const now = Date.now();
+          const msgTime = data.timestamp?.toMillis ? data.timestamp.toMillis() : now;
+          
+          if (now - msgTime < 45000) {
+            showToast(`Sóng: ${data.body}`);
           }
         }
       });
@@ -1005,18 +1004,17 @@ export default function App() {
                       className="absolute right-0 top-full mt-2 w-48 bg-white rounded-2xl shadow-xl border z-50 overflow-hidden"
                     >
                       <div className="p-2">
-                        {isAdmin && (
-                          <button 
-                            onClick={() => {
-                              setTab('SETTINGS');
-                              setShowUserMenu(false);
-                            }}
-                            className="w-full flex items-center gap-3 px-3 py-2.5 text-xs font-bold text-gray-700 hover:bg-blue-50 hover:text-blue-600 rounded-xl transition-colors"
-                          >
-                            <LayoutDashboard className="w-4 h-4" />
-                            Cấu hình hệ thống
-                          </button>
-                        )}
+                        <button 
+                          onClick={() => {
+                            setTab('SETTINGS');
+                            setShowUserMenu(false);
+                          }}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 text-xs font-bold text-gray-700 hover:bg-blue-50 hover:text-blue-600 rounded-xl transition-colors"
+                        >
+                          <Settings className="w-4 h-4" />
+                          {isAdmin ? "Cấu hình hệ thống" : "Cài đặt & Thông báo"}
+                        </button>
+
                         {isAdmin && (
                           <button 
                             onClick={() => {
@@ -1641,126 +1639,131 @@ export default function App() {
           </div>
         )}
 
-        {tab === 'SETTINGS' && isAdmin && (
+        {tab === 'SETTINGS' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300 pb-10">
             <div className="flex items-center gap-3 mb-2">
               <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-                <LayoutDashboard className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                <Settings className="w-5 h-5 text-blue-600 dark:text-blue-400" />
               </div>
               <div>
-                <h2 className="text-lg font-bold text-gray-900 dark:text-white">Cấu hình hệ thống</h2>
-                <p className="text-xs text-gray-500 dark:text-slate-400">Quản lý xưởng và loại gia công</p>
-              </div>
-            </div>
-
-            {/* Workshops Management */}
-            <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
-              <div className="p-4 border-b dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50 flex items-center justify-between">
-                <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
-                  <Users className="w-4 h-4 text-blue-500" />
-                  Danh sách Xưởng
-                </h3>
-              </div>
-              <div className="p-4 space-y-3">
-                {settings.workshops.map((ws, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <input 
-                      type="text"
-                      value={ws}
-                      onChange={(e) => {
-                        const newWs = [...settings.workshops];
-                        newWs[idx] = e.target.value;
-                        setSettings({ ...settings, workshops: newWs });
-                      }}
-                      className="flex-1 bg-gray-50 dark:bg-slate-800 border dark:border-slate-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none dark:text-white"
-                    />
-                    <button 
-                      onClick={() => {
-                        const newWs = settings.workshops.filter((_, i) => i !== idx);
-                        setSettings({ ...settings, workshops: newWs });
-                      }}
-                      className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-                <button 
-                  onClick={() => setSettings({ ...settings, workshops: [...settings.workshops, "Xưởng mới"] })}
-                  className="w-full py-2 border-2 border-dashed border-gray-200 dark:border-slate-800 rounded-xl text-xs font-bold text-gray-500 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-800 transition-all flex items-center justify-center gap-2"
-                >
-                  <Plus className="w-4 h-4" />
-                  Thêm xưởng
-                </button>
-              </div>
-            </div>
-
-            {/* Webhook Configuration */}
-            <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
-              <div className="p-4 border-b dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50 flex items-center justify-between">
-                <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
-                  <Webhook className="w-4 h-4 text-green-500" />
-                  Cấu hình Webhook (n8n)
-                </h3>
-              </div>
-              <div className="p-4 space-y-3">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">n8n Webhook URL</label>
-                  <input 
-                    type="text"
-                    value={settings.webhookUrl || ""}
-                    onChange={(e) => setSettings({ ...settings, webhookUrl: e.target.value })}
-                    placeholder="https://n8n.your-server.com/webhook/..."
-                    className="w-full bg-gray-50 dark:bg-slate-800 border dark:border-slate-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none dark:text-white"
-                  />
-                </div>
-                <p className="text-[10px] text-gray-500 dark:text-slate-400 italic">
-                  Dữ liệu sẽ được gửi sang n8n mỗi khi bạn Xác nhận giao hàng hoặc Nhận hàng.
+                <h2 className="text-lg font-bold text-gray-900 dark:text-white">
+                  {isAdmin ? "Cấu hình hệ thống" : "Cài đặt ứng dụng"}
+                </h2>
+                <p className="text-xs text-gray-500 dark:text-slate-400">
+                  {isAdmin ? "Quản lý xưởng và loại gia công" : "Thiết lập thông báo và giao diện"}
                 </p>
               </div>
             </div>
 
-            {/* Types Management */}
-            <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
-              <div className="p-4 border-b dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50 flex items-center justify-between">
-                <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
-                  <Package className="w-4 h-4 text-purple-500" />
-                  Loại gia công
-                </h3>
-              </div>
-              <div className="p-4 space-y-3">
-                {settings.types.map((t, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <input 
-                      type="text"
-                      value={t}
-                      onChange={(e) => {
-                        const newTypes = [...settings.types];
-                        newTypes[idx] = e.target.value;
-                        setSettings({ ...settings, types: newTypes });
-                      }}
-                      className="flex-1 bg-gray-50 dark:bg-slate-800 border dark:border-slate-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none dark:text-white"
-                    />
+            {isAdmin && (
+              <>
+                {/* Workshops Management */}
+                <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
+                  <div className="p-4 border-b dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50 flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                      <Users className="w-4 h-4 text-blue-500" />
+                      Danh sách Xưởng
+                    </h3>
+                  </div>
+                  <div className="p-4 space-y-3">
+                    {settings.workshops.map((ws, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <input 
+                          type="text"
+                          value={ws}
+                          onChange={(e) => {
+                            const newWs = [...settings.workshops];
+                            newWs[idx] = e.target.value;
+                            setSettings({ ...settings, workshops: newWs });
+                          }}
+                          className="flex-1 bg-gray-50 dark:bg-slate-800 border dark:border-slate-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none dark:text-white"
+                        />
+                        <button 
+                          onClick={() => {
+                            const newWs = settings.workshops.filter((_, i) => i !== idx);
+                            setSettings({ ...settings, workshops: newWs });
+                          }}
+                          className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
                     <button 
-                      onClick={() => {
-                        const newTypes = settings.types.filter((_, i) => i !== idx);
-                        setSettings({ ...settings, types: newTypes });
-                      }}
-                      className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                      onClick={() => setSettings({ ...settings, workshops: [...settings.workshops, "Xưởng mới"] })}
+                      className="w-full py-4 border-2 border-dashed border-gray-200 dark:border-slate-800 rounded-2xl flex flex-col items-center justify-center gap-2 text-gray-500 dark:text-slate-400 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-all"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Plus className="w-6 h-6" />
+                      <span className="text-sm font-bold">Thêm xưởng</span>
                     </button>
                   </div>
-                ))}
-                <button 
-                  onClick={() => setSettings({ ...settings, types: [...settings.types, "Loại mới"] })}
-                  className="w-full py-2 border-2 border-dashed border-gray-200 dark:border-slate-800 rounded-xl text-xs font-bold text-gray-500 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-800 transition-all flex items-center justify-center gap-2"
-                >
-                  <Plus className="w-4 h-4" />
-                  Thêm loại gia công
-                </button>
-              </div>
-            </div>
+                </div>
+
+                {/* Webhook Configuration */}
+                <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
+                  <div className="p-4 border-b dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50 flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                      <Webhook className="w-4 h-4 text-green-500" />
+                      Cấu hình Webhook (n8n)
+                    </h3>
+                  </div>
+                  <div className="p-4 space-y-3">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">n8n Webhook URL</label>
+                      <input 
+                        type="text"
+                        value={settings.webhookUrl || ""}
+                        onChange={(e) => setSettings({ ...settings, webhookUrl: e.target.value })}
+                        placeholder="https://n8n.your-server.com/webhook/..."
+                        className="w-full bg-gray-50 dark:bg-slate-800 border dark:border-slate-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none dark:text-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Types Management */}
+                <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
+                  <div className="p-4 border-b dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50 flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                      <Package className="w-4 h-4 text-purple-500" />
+                      Loại gia công
+                    </h3>
+                  </div>
+                  <div className="p-4 space-y-3">
+                    {settings.types.map((t, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <input 
+                          type="text"
+                          value={t}
+                          onChange={(e) => {
+                            const newTypes = [...settings.types];
+                            newTypes[idx] = e.target.value;
+                            setSettings({ ...settings, types: newTypes });
+                          }}
+                          className="flex-1 bg-gray-50 dark:bg-slate-800 border dark:border-slate-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none dark:text-white"
+                        />
+                        <button 
+                          onClick={() => {
+                            const newTypes = settings.types.filter((_, i) => i !== idx);
+                            setSettings({ ...settings, types: newTypes });
+                          }}
+                          className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                    <button 
+                      onClick={() => setSettings({ ...settings, types: [...settings.types, "Loại mới"] })}
+                      className="w-full py-2 border-2 border-dashed border-gray-200 dark:border-slate-800 rounded-xl text-xs font-bold text-gray-500 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-800 transition-all flex items-center justify-center gap-2"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Thêm loại gia công
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
 
             {/* Notification Management */}
             <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
@@ -1792,20 +1795,42 @@ export default function App() {
                   </button>
                 </div>
 
+                {notificationPermission !== 'granted' && (
+                  <div className="p-3 bg-red-50 dark:bg-red-900/20 rounded-xl border border-red-100 dark:border-red-800/30 flex items-center gap-3">
+                    <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
+                    <p className="text-[10px] text-red-700 dark:text-red-400 leading-relaxed font-medium">
+                      Để nhận thông báo nổ trên màn hình, bạn cần bấm nút <b>Bật thông báo</b> và chọn <b>Cho phép</b> trong bảng hiện ra.
+                    </p>
+                  </div>
+                )}
+
                 {notificationPermission === 'granted' && (
-                  <button 
-                    onClick={async () => {
-                      if (!messaging) return;
-                      const token = await getToken(messaging, { vapidKey: "BN9EVEaV4o4ybQU7ryFXAv1fM1EJQ6qOJfR9AnYumxopAreO9bbDkgWXJACIoxsjyKqV40LfVSj7VTve5Sq9sYI" });
-                      if (token) {
-                        navigator.clipboard.writeText(token);
-                        showToast("Đã copy Token thiết bị!");
-                      }
-                    }}
-                    className="w-full py-2 bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-400 text-[10px] font-bold rounded-xl border border-dashed border-gray-300 dark:border-slate-700 hover:bg-gray-200 transition-all"
-                  >
-                    Copy Token thiết bị (Dùng cho n8n)
-                  </button>
+                  <div className="space-y-2">
+                    <button 
+                      onClick={async () => {
+                        if (!messaging) return;
+                        const token = await getToken(messaging, { vapidKey: "BN9EVEaV4o4ybQU7ryFXAv1fM1EJQ6qOJfR9AnYumxopAreO9bbDkgWXJACIoxsjyKqV40LfVSj7VTve5Sq9sYI" });
+                        if (token) {
+                          navigator.clipboard.writeText(token);
+                          showToast("Đã copy Token thiết bị!");
+                        }
+                      }}
+                      className="w-full py-2 bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-400 text-[10px] font-bold rounded-xl border border-dashed border-gray-300 dark:border-slate-700 hover:bg-gray-200 transition-all"
+                    >
+                      Copy Token thiết bị (Dùng cho n8n)
+                    </button>
+                    
+                    <button 
+                      onClick={() => {
+                        sendGlobalNotification("Test Hệ Thống", "Sóng thông báo đang hoạt động bình thường! 📡");
+                        showToast("Đã bắn tín hiệu test!");
+                      }}
+                      className="w-full py-2 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 text-[10px] font-bold rounded-xl border border-blue-200 dark:border-blue-800/50 flex items-center justify-center gap-2 hover:bg-blue-600 hover:text-white transition-all"
+                    >
+                      <Send className="w-3 h-3" />
+                      Gửi thông báo test toàn hệ thống
+                    </button>
+                  </div>
                 )}
 
                 <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-100 dark:border-blue-800/30">
