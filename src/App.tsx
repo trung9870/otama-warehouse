@@ -23,7 +23,10 @@ import {
   Sun,
   Eye,
   EyeOff,
-  ListChecks
+  ListChecks,
+  Webhook,
+  MessageSquare,
+  Send
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
@@ -80,8 +83,32 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [settings, setSettings] = useState({
     workshops: WORKSHOPS,
-    types: TYPES
+    types: TYPES,
+    webhookUrl: ''
   });
+
+  const triggerWebhook = async (action: string, data: any) => {
+    if (!settings.webhookUrl) return;
+    try {
+      await fetch(settings.webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          timestamp: new Date().toISOString(),
+          user: user?.email || userProfile?.name,
+          data
+        })
+      });
+    } catch (err) {
+      console.error("Webhook error:", err);
+    }
+  };
+
+  const shareToZalo = (text: string) => {
+    const url = `https://zalo.me/share?text=${encodeURIComponent(text)}`;
+    window.open(url, '_blank');
+  };
   const [modal, setModal] = useState<any>(null);
   const [user, setUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -119,6 +146,14 @@ export default function App() {
   
   // Notification Setup
   const requestNotificationPermission = async () => {
+    if (typeof Notification === 'undefined') {
+      showToast("Trình duyệt này không hỗ trợ thông báo");
+      return;
+    }
+    if (Notification.permission === 'denied') {
+      showToast("Bạn cần vào Cài đặt trình duyệt/điện thoại để Bỏ chặn thông báo");
+      return;
+    }
     if (!messaging || !user) return;
     try {
       const permission = await Notification.requestPermission();
@@ -585,9 +620,38 @@ export default function App() {
     });
   };
 
+  const triggerNativeNotification = (title: string, body: string) => {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      try {
+        new Notification(title, {
+          body,
+          icon: '/favicon.ico',
+          badge: '/favicon.ico',
+          vibrate: [200, 100, 200]
+        });
+      } catch (err) {
+        if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+          navigator.serviceWorker.ready.then(registration => {
+            registration.showNotification(title, {
+              body,
+              icon: '/favicon.ico',
+              badge: '/favicon.ico'
+            });
+          });
+        }
+      }
+    }
+  };
+
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2500);
+    
+    // Logic to decide when to show a native push-style notification
+    const importantKeywords = ["Đã xác nhận", "Đã nhận đủ", "Đã đăng ký", "nhân viên"];
+    if (importantKeywords.some(k => msg.includes(k))) {
+      triggerNativeNotification("Otama Warehouse", msg);
+    }
   };
 
   // --- Date Navigation ---
@@ -1371,6 +1435,17 @@ export default function App() {
                                 <div className="flex gap-1.5">
                                   <button 
                                     onClick={() => {
+                                      const itemsText = Object.entries(send.actualItems || send.items).map(([k, v]) => `${k}: ${v}`).join("\n");
+                                      const text = `Xưởng ${send.workshop} ơi,\nKho Otama vừa giao hàng:\n${itemsText}\nLần: ${send.batch}\nLúc: ${send.deliveredAt}\nCheck giúp em nhé!`;
+                                      shareToZalo(text);
+                                    }}
+                                    className="p-2 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg hover:bg-blue-600 hover:text-white transition-all"
+                                    title="Gửi Zalo cho xưởng"
+                                  >
+                                    <MessageSquare className="w-4 h-4" />
+                                  </button>
+                                  <button 
+                                    onClick={() => {
                                       setHistorySend(send);
                                       setModal({ type: 'receiveHistory' });
                                     }}
@@ -1445,6 +1520,11 @@ export default function App() {
                                                 }
                                               }
                                             }));
+                                            triggerWebhook('FULL_RECEIVE', {
+                                              workshop: send.workshop,
+                                              batch: send.batch,
+                                              items: items
+                                            });
                                             setModal(null);
                                             showToast(`Đã nhận đủ hàng từ ${send.workshop}`);
                                           }
@@ -1559,6 +1639,31 @@ export default function App() {
               </div>
             </div>
 
+            {/* Webhook Configuration */}
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
+              <div className="p-4 border-b dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50 flex items-center justify-between">
+                <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                  <Webhook className="w-4 h-4 text-green-500" />
+                  Cấu hình Webhook (n8n)
+                </h3>
+              </div>
+              <div className="p-4 space-y-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">n8n Webhook URL</label>
+                  <input 
+                    type="text"
+                    value={settings.webhookUrl || ""}
+                    onChange={(e) => setSettings({ ...settings, webhookUrl: e.target.value })}
+                    placeholder="https://n8n.your-server.com/webhook/..."
+                    className="w-full bg-gray-50 dark:bg-slate-800 border dark:border-slate-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none dark:text-white"
+                  />
+                </div>
+                <p className="text-[10px] text-gray-500 dark:text-slate-400 italic">
+                  Dữ liệu sẽ được gửi sang n8n mỗi khi bạn Xác nhận giao hàng hoặc Nhận hàng.
+                </p>
+              </div>
+            </div>
+
             {/* Types Management */}
             <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
               <div className="p-4 border-b dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50 flex items-center justify-between">
@@ -1630,6 +1735,23 @@ export default function App() {
                     {notificationPermission === 'granted' ? 'Đã kết nối' : 'Bật thông báo'}
                   </button>
                 </div>
+
+                {notificationPermission === 'granted' && (
+                  <button 
+                    onClick={async () => {
+                      if (!messaging) return;
+                      const token = await getToken(messaging, { vapidKey: "BN9EVEaV4o4ybQU7ryFXAv1fM1EJQ6qOJfR9AnYumxopAreO9bbDkgWXJACIoxsjyKqV40LfVSj7VTve5Sq9sYI" });
+                      if (token) {
+                        navigator.clipboard.writeText(token);
+                        showToast("Đã copy Token thiết bị!");
+                      }
+                    }}
+                    className="w-full py-2 bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-400 text-[10px] font-bold rounded-xl border border-dashed border-gray-300 dark:border-slate-700 hover:bg-gray-200 transition-all"
+                  >
+                    Copy Token thiết bị (Dùng cho n8n)
+                  </button>
+                )}
+
                 <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-100 dark:border-blue-800/30">
                   <p className="text-[10px] text-blue-700 dark:text-blue-400 font-medium leading-relaxed">
                     Mẹo: "Thêm vào màn hình chính" (Add to Home Screen) để trải nghiệm như ứng dụng thật và nhận thông báo ngay cả khi không mở trình duyệt.
@@ -1692,7 +1814,20 @@ export default function App() {
                 return (
                   <div key={bk} className="bg-white rounded-2xl border shadow-sm overflow-hidden">
                     <div className="bg-gray-50 px-4 py-3 border-b flex items-center justify-between">
-                      <h3 className="text-sm font-bold text-gray-800 tracking-tight">Lần {bk}</h3>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-bold text-gray-800 tracking-tight">Lần {bk}</h3>
+                        <button 
+                          onClick={() => {
+                            const summaryText = bItems.map(it => `- ${it.name}: ${it.requested}`).join("\n");
+                            const text = `DANH SÁCH LẤY HÀNG B - LẦN ${bk}\nNgày: ${ticketB.date}\n${summaryText}\nTổng: ${bItems.reduce((s, i) => s + i.requested, 0)} chiếc.`;
+                            shareToZalo(text);
+                          }}
+                          className="p-1 px-2.5 bg-blue-100 text-blue-600 rounded-full text-[9px] font-bold flex items-center gap-1 hover:bg-blue-600 hover:text-white transition-all"
+                        >
+                          <MessageSquare className="w-3 h-3" />
+                          Gửi Zalo
+                        </button>
+                      </div>
                       <span className="text-[10px] font-bold text-gray-400 bg-white px-2 py-0.5 rounded border">
                         {bItems.length} SP · {bItems.reduce((s, i) => s + i.requested, 0)} chiếc
                       </span>
@@ -2575,6 +2710,12 @@ export default function App() {
                     }
                   }
                 }));
+                triggerWebhook('PARTIAL_RECEIVE', {
+                  workshop: receivingPartialSend.workshop,
+                  batch: receivingPartialSend.batch,
+                  items: finalItems,
+                  errors: finalErrors
+                });
                 setModal(null);
                 showToast(`Đã cập nhật số lượng nhận từ ${receivingPartialSend.workshop}`);
               }}
@@ -2787,6 +2928,12 @@ export default function App() {
                   }
 
                   return nextData;
+                });
+                triggerWebhook('DELIVERY', {
+                  workshop: deliveringSend.workshop,
+                  batch: deliveringSend.batch,
+                  items: deliveryActual,
+                  note: deliveryNote
                 });
                 setModal(null);
                 showToast("Đã xác nhận giao hàng");
