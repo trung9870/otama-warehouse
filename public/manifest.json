@@ -1,0 +1,22 @@
+{
+  "short_name": "Otama WH",
+  "name": "Otama Warehouse System",
+  "icons": [
+    {
+      "src": "https://picsum.photos/seed/warehouse/192/192",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "https://picsum.photos/seed/warehouse/512/512",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#ffffff",
+  "display": "standalone",
+  "scope": "/",
+  "theme_color": "#2563eb",
+  "description": "Hệ thống quản lý kho Otama - Giao nhận hàng thông minh"
+}

@@ -20,7 +20,10 @@ import {
   Clock,
   LogOut,
   Moon,
-  Sun
+  Sun,
+  Eye,
+  EyeOff,
+  ListChecks
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
@@ -44,9 +47,12 @@ import {
   where,
   getDoc,
   getDocs,
-  writeBatch
+  writeBatch,
+  arrayUnion,
+  arrayRemove
 } from 'firebase/firestore';
-import { db, auth, firebaseConfig } from './firebase';
+import { getToken, onMessage } from 'firebase/messaging';
+import { db, auth, messaging, firebaseConfig } from './firebase';
 import { cn } from './lib/utils';
 import { Modal } from './components/Modal';
 import { 
@@ -98,9 +104,12 @@ export default function App() {
   // Create staff states
   const [newStaffUsername, setNewStaffUsername] = useState('');
   const [newStaffPassword, setNewStaffPassword] = useState('');
+  const [showReceivedProgress, setShowReceivedProgress] = useState(false);
   const [newStaffName, setNewStaffName] = useState('');
   const [isCreatingStaff, setIsCreatingStaff] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [historySend, setHistorySend] = useState<SendOperation | null>(null);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
 
   // Derived data
   const isAdmin = user?.email === 'trungg9870@gmail.com' || userProfile?.role === 'admin';
@@ -108,6 +117,51 @@ export default function App() {
   const isStaff = isManager || userProfile?.role === 'staff';
   const destinations = ["Về A", ...settings.workshops];
   
+  // Notification Setup
+  const requestNotificationPermission = async () => {
+    if (!messaging || !user) return;
+    try {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+      if (permission === 'granted') {
+        // Note: You need a VAPID key from Firebase Console
+        // Settings -> Cloud Messaging -> Web Configuration
+        const VAPID_KEY = "BN9EVEaV4o4ybQU7ryFXAv1fM1EJQ6qOJfR9AnYumxopAreO9bbDkgWXJACIoxsjyKqV40LfVSj7VTve5Sq9sYI";
+        if (!VAPID_KEY) {
+          showToast("Vui lòng cấu hình VAPID Key trong code để nhận thông báo");
+          return;
+        }
+
+        const token = await getToken(messaging, { vapidKey: VAPID_KEY });
+        if (token) {
+          await setDoc(doc(db, 'users', user.uid), {
+            fcmTokens: arrayUnion(token)
+          }, { merge: true });
+          showToast("Đã đăng ký nhận thông báo!");
+        }
+      }
+    } catch (err) {
+      console.error("Error requesting permission:", err);
+      showToast("Lỗi khi đăng ký thông báo");
+    }
+  };
+
+  useEffect(() => {
+    if (typeof Notification !== 'undefined') {
+      setNotificationPermission(Notification.permission);
+    }
+    
+    if (messaging) {
+      const unsub = onMessage(messaging, (payload) => {
+        console.log("Foreground message:", payload);
+        if (payload.notification) {
+          showToast(`TB: ${payload.notification.title}`);
+        }
+      });
+      return () => unsub();
+    }
+  }, [user]);
+
   // Helper to aggregate items by category
   const aggregateByCategory = (items: { name: string, qty: number, sku?: string }[]) => {
     const result: Record<string, number> = {};
@@ -664,6 +718,35 @@ export default function App() {
     return { status: "partial", recvTotal, sentTotal };
   };
 
+  const undoReceive = (send: SendOperation) => {
+    const tA = { ...ticketA };
+    const wsReceives = tA.receives[send.workshop] || [];
+    // Find the last receive for this specific send
+    const lastIndex = [...wsReceives].reverse().findIndex(r => r.forSendId === send.id);
+    if (lastIndex === -1) {
+      showToast("Không có dữ liệu để hoàn tác");
+      return;
+    }
+    
+    const actualIndex = wsReceives.length - 1 - lastIndex;
+    const newWsReceives = [...wsReceives];
+    newWsReceives.splice(actualIndex, 1);
+    
+    tA.receives = {
+      ...tA.receives,
+      [send.workshop]: newWsReceives
+    };
+
+    setState(prev => ({
+      ...prev,
+      ticketsA: {
+        ...prev.ticketsA,
+        [currentDate]: tA
+      }
+    }));
+    showToast("Đã hoàn tác lượt nhận gần nhất");
+  };
+
   return (
     <div className="max-w-md mx-auto bg-white dark:bg-slate-950 min-h-screen shadow-xl flex flex-col relative transition-colors duration-300">
       {/* Login Overlay */}
@@ -957,8 +1040,18 @@ export default function App() {
 
             {/* Allocation Matrix */}
             <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
-              <div className="bg-gray-50 dark:bg-slate-800/50 px-4 py-2 border-b dark:border-slate-800">
+              <div className="bg-gray-50 dark:bg-slate-800/50 px-4 py-2 border-b dark:border-slate-800 flex justify-between items-center">
                 <h3 className="text-xs font-bold text-gray-700 dark:text-slate-300 uppercase tracking-wider">Phân chia xưởng</h3>
+                <button 
+                  onClick={() => setShowReceivedProgress(!showReceivedProgress)}
+                  className={cn(
+                    "p-1.5 rounded-lg transition-all active:scale-90",
+                    showReceivedProgress ? "bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400" : "bg-gray-100 text-gray-400 dark:bg-slate-700 dark:text-slate-400"
+                  )}
+                  title={showReceivedProgress ? "Ẩn số lượng nhận" : "Xem số lượng nhận"}
+                >
+                  {showReceivedProgress ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                </button>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
@@ -971,16 +1064,52 @@ export default function App() {
                   </thead>
                   <tbody className="divide-y dark:divide-slate-800">
                     {settings.types.map(t => {
-                      const rowTotals = destinations.map((dest, dIdx) => {
+                      const rowData = destinations.map((dest, dIdx) => {
                         const sends = ticketA.sends.filter(s => (s.workshopIdx === dIdx || s.workshop === dest) && s.delivered);
-                        return sends.reduce((sum, s) => sum + ((s.actualItems || s.items)[t] || 0), 0);
+                        const sent = sends.reduce((sum: number, s) => sum + ((s.actualItems || s.items)[t] || 0), 0);
+                        const received = ticketA.receives[dest]?.reduce((sum: number, r: ReceiveOperation) => sum + (r.items[t] || 0), 0) || 0;
+                        return { sent, received };
                       });
-                      const total = rowTotals.reduce((a: number, b) => a + b, 0);
+                      const totalSent = rowData.reduce((a, b) => a + b.sent, 0);
+                      const totalReceived = rowData.reduce((a, b) => a + b.received, 0);
+                      
                       return (
                         <tr key={t} className="border-b dark:border-slate-800 last:border-0 hover:bg-gray-50 dark:hover:bg-slate-800/30 transition-colors">
                           <td className="p-3 font-bold text-gray-700 dark:text-slate-200">{t}</td>
-                          {rowTotals.map((v, i) => <td key={i} className="p-3 text-center text-gray-600 dark:text-slate-400">{v || 0}</td>)}
-                          <td className="p-3 text-center font-bold text-blue-600 dark:text-blue-400 bg-blue-50/30 dark:bg-blue-900/20">{total}</td>
+                          {rowData.map((v, i) => (
+                            <td key={i} className="p-3 text-center">
+                              {!showReceivedProgress ? (
+                                <span className="text-gray-600 dark:text-slate-400">{v.sent || 0}</span>
+                              ) : (
+                                <div className="flex flex-col items-center">
+                                  <span className="text-gray-900 dark:text-white font-bold">{v.sent || 0}</span>
+                                  <div className="w-full h-[1px] bg-gray-200 dark:bg-slate-700 my-0.5" />
+                                  <span className={cn(
+                                    "font-bold",
+                                    v.received >= v.sent && v.sent > 0 ? "text-green-600 dark:text-green-400" : 
+                                    v.received > 0 ? "text-amber-600 dark:text-amber-400" : "text-gray-400"
+                                  )}>
+                                    {v.received || 0}
+                                  </span>
+                                </div>
+                              )}
+                            </td>
+                          ))}
+                          <td className="p-3 text-center font-bold bg-blue-50/30 dark:bg-blue-900/20">
+                            {!showReceivedProgress ? (
+                              <span className="text-blue-600 dark:text-blue-400">{totalSent}</span>
+                            ) : (
+                              <div className="flex flex-col items-center">
+                                <span className="text-blue-700 dark:text-blue-300">{totalSent}</span>
+                                <div className="w-full h-[1px] bg-blue-200 dark:bg-blue-800 my-0.5" />
+                                <span className={cn(
+                                  totalReceived >= totalSent && totalSent > 0 ? "text-green-600 dark:text-green-400" : "text-blue-600 dark:text-blue-400"
+                                )}>
+                                  {totalReceived}
+                                </span>
+                              </div>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
@@ -990,15 +1119,40 @@ export default function App() {
                       <td className="p-3 dark:text-white">TỔNG</td>
                       {destinations.map((dest, dIdx) => {
                         const sends = ticketA.sends.filter(s => (s.workshopIdx === dIdx || s.workshop === dest) && s.delivered);
-                        const total = sends.reduce((sum: number, s) => {
-                          return sum + sumValues(s.actualItems || s.items);
-                        }, 0);
-                        return <td key={dest} className="p-3 text-center dark:text-white">{total}</td>;
+                        const sent = sends.reduce((sum: number, s) => sum + sumValues(s.actualItems || s.items), 0);
+                        const received = ticketA.receives[dest]?.reduce((sum: number, r: ReceiveOperation) => sum + sumValues(r.items), 0) || 0;
+                        
+                        return (
+                          <td key={dest} className="p-3 text-center dark:text-white">
+                            {!showReceivedProgress ? (
+                              sent
+                            ) : (
+                              <div className="flex flex-col items-center">
+                                <span>{sent}</span>
+                                <div className="w-full h-[1px] bg-gray-300 dark:bg-slate-600 my-0.5" />
+                                <span className={sent > 0 && received >= sent ? "text-green-600 dark:text-green-400" : ""}>{received}</span>
+                              </div>
+                            )}
+                          </td>
+                        );
                       })}
-                      <td className="p-3 text-center text-blue-700 dark:text-blue-300 bg-blue-100/50 dark:bg-blue-900/40">
-                        {ticketA.sends.filter(s => s.delivered).reduce((sum: number, s) => {
-                          return sum + sumValues(s.actualItems || s.items);
-                        }, 0)}
+                      <td className="p-3 text-center bg-blue-100/50 dark:bg-blue-900/40">
+                        {(() => {
+                          const totalSent = ticketA.sends.filter(s => s.delivered).reduce((sum: number, s) => sum + sumValues(s.actualItems || s.items), 0);
+                          const totalReceived = Object.values(ticketA.receives).flat().reduce((sum: number, r: any) => sum + sumValues(r.items), 0);
+                          
+                          return !showReceivedProgress ? (
+                            <span className="text-blue-700 dark:text-blue-300">{totalSent}</span>
+                          ) : (
+                            <div className="flex flex-col items-center">
+                              <span className="text-blue-800 dark:text-blue-200">{totalSent}</span>
+                              <div className="w-full h-[1px] bg-blue-300 dark:bg-blue-700 my-0.5" />
+                              <span className={totalSent > 0 && totalReceived >= totalSent ? "text-green-700 dark:text-green-300" : "text-blue-700 dark:text-blue-300"}>
+                                {totalReceived}
+                              </span>
+                            </div>
+                          );
+                        })()}
                       </td>
                     </tr>
                   </tfoot>
@@ -1179,6 +1333,16 @@ export default function App() {
                                     <span className={cn("font-bold text-sm", isDone ? "text-gray-400 dark:text-slate-500" : "text-gray-900 dark:text-white")}>
                                       {send.workshop}
                                     </span>
+                                    <button 
+                                      onClick={() => {
+                                        setEditingSendWorkshop(send);
+                                        setModal({ type: 'editSendWorkshop' });
+                                      }}
+                                      className="p-1 text-gray-400 hover:text-amber-600 transition-colors"
+                                      title="Sửa xưởng/đích"
+                                    >
+                                      <Edit2 className="w-3 h-3" />
+                                    </button>
                                     {send.source === 'B' && (
                                       <span className="px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 text-[9px] font-bold rounded">Từ B</span>
                                     )}
@@ -1189,20 +1353,31 @@ export default function App() {
                                       </span>
                                     )}
                                   </div>
-                                  <p className="text-[10px] text-gray-400 dark:text-slate-500 mt-0.5 truncate">
+                                  <div className="mt-1.5 w-full max-w-[120px]">
+                                    <div className="h-1.5 w-full bg-gray-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                      <div 
+                                        className={cn(
+                                          "h-full transition-all duration-500",
+                                          isDone ? "bg-green-500" : "bg-blue-500"
+                                        )}
+                                        style={{ width: `${Math.min(100, (status.recvTotal / status.sentTotal) * 100)}%` }}
+                                      />
+                                    </div>
+                                  </div>
+                                  <p className="text-[10px] text-gray-400 dark:text-slate-500 mt-1 truncate">
                                     {Object.entries(send.actualItems || send.items).map(([k, v]) => `${k} ${v}`).join(", ")}
                                   </p>
                                 </div>
-                                <div className="flex gap-2">
+                                <div className="flex gap-1.5">
                                   <button 
                                     onClick={() => {
-                                      setEditingSendWorkshop(send);
-                                      setModal({ type: 'editSendWorkshop' });
+                                      setHistorySend(send);
+                                      setModal({ type: 'receiveHistory' });
                                     }}
-                                    className="p-2 bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-400 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-900/20 hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
-                                    title="Sửa xưởng/đích"
+                                    className="p-2 bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-400 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                                    title="Lịch sử lấy hàng"
                                   >
-                                    <Edit2 className="w-4 h-4" />
+                                    <Clock className="w-4 h-4" />
                                   </button>
                                   <button 
                                     onClick={() => {
@@ -1223,10 +1398,10 @@ export default function App() {
                                       setPartialReceiveErrors({});
                                       setModal({ type: 'partialReceive' });
                                     }}
-                                    className="p-2 bg-gray-100 text-gray-500 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                                    className="p-2 bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-400 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
                                     title="Cập nhật thực tế"
                                   >
-                                    <Edit3 className="w-4 h-4" />
+                                    <ListChecks className="w-4 h-4" />
                                   </button>
 
                                   {!isDone ? (
@@ -1423,6 +1598,43 @@ export default function App() {
                   <Plus className="w-4 h-4" />
                   Thêm loại gia công
                 </button>
+              </div>
+            </div>
+
+            {/* Notification Management */}
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
+              <div className="p-4 border-b dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50 flex items-center justify-between">
+                <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-orange-500" />
+                  Thông báo & PWA
+                </h3>
+              </div>
+              <div className="p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <p className="text-xs font-bold text-gray-700 dark:text-gray-200">Trạng thái thông báo</p>
+                    <p className="text-[10px] text-gray-500 dark:text-slate-400">
+                      {notificationPermission === 'granted' ? 'Đã bật' : notificationPermission === 'denied' ? 'Bị chặn' : 'Chưa thiết lập'}
+                    </p>
+                  </div>
+                  <button 
+                    onClick={requestNotificationPermission}
+                    disabled={notificationPermission === 'granted'}
+                    className={cn(
+                      "px-4 py-1.5 rounded-xl text-xs font-bold transition-all",
+                      notificationPermission === 'granted' 
+                        ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" 
+                        : "bg-blue-600 text-white shadow-md shadow-blue-100 dark:shadow-none"
+                    )}
+                  >
+                    {notificationPermission === 'granted' ? 'Đã kết nối' : 'Bật thông báo'}
+                  </button>
+                </div>
+                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-100 dark:border-blue-800/30">
+                  <p className="text-[10px] text-blue-700 dark:text-blue-400 font-medium leading-relaxed">
+                    Mẹo: "Thêm vào màn hình chính" (Add to Home Screen) để trải nghiệm như ứng dụng thật và nhận thông báo ngay cả khi không mở trình duyệt.
+                  </p>
+                </div>
               </div>
             </div>
 
@@ -2394,7 +2606,7 @@ export default function App() {
                 </div>
               </div>
             )}
-
+            
             <div className="space-y-3">
               <div className="flex items-center justify-between text-[10px] font-bold text-gray-400 uppercase px-1">
                 <span>Loại hàng</span>
@@ -3142,6 +3354,75 @@ export default function App() {
             </div>
           </div>
         </div>
+      </Modal>
+
+      <Modal
+        isOpen={modal?.type === 'receiveHistory'}
+        onClose={() => setModal(null)}
+        title="Lịch sử nhận hàng"
+        footer={<button onClick={() => setModal(null)} className="w-full py-3 bg-gray-100 text-gray-600 font-bold rounded-xl">Đóng</button>}
+      >
+        {historySend && (
+          <div className="space-y-4">
+            <div className="bg-gray-50 dark:bg-slate-900 p-3 rounded-xl border dark:border-slate-800">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Xưởng</p>
+              <h4 className="text-lg font-bold text-gray-900 dark:text-white">{historySend.workshop}</h4>
+              <p className="text-xs text-gray-500 mt-0.5">Lần {historySend.batch} · Tổng giao: {sumValues(historySend.actualItems || historySend.items)}</p>
+            </div>
+            
+            <div className="space-y-3">
+              {(ticketA.receives[historySend.workshop] || [])
+                .filter(r => r.forSendId === historySend.id)
+                .sort((a, b) => b.id - a.id)
+                .map((rec, idx) => (
+                  <div key={rec.id} className="p-3 bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-xl shadow-sm">
+                    <div className="flex justify-between items-center mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-blue-600 dark:text-blue-400">Lượt nhận #{rec.id}</span>
+                        {idx === 0 && (
+                          <button 
+                            onClick={() => {
+                              setModal({
+                                type: 'confirm',
+                                title: "Hoàn tác lượt này?",
+                                msg: `Bạn muốn xoá lượt nhận hàng #${rec.id} của xưởng ${historySend.workshop}?`,
+                                onOk: () => {
+                                  undoReceive(historySend);
+                                  setModal(null);
+                                }
+                              });
+                            }}
+                            className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors"
+                            title="Xoá lượt này"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-gray-400 dark:text-slate-500">{rec.time}</span>
+                    </div>
+                    <div className="space-y-1">
+                      {Object.entries(rec.items).map(([k, v]) => (
+                        <div key={k} className="flex justify-between text-xs">
+                          <span className="text-gray-600 dark:text-slate-400">{k}</span>
+                          <span className="font-bold text-gray-900 dark:text-white">{v}</span>
+                        </div>
+                      ))}
+                      {rec.errors && Object.entries(rec.errors).length > 0 && Object.entries(rec.errors).map(([k, v]) => (
+                        <div key={k} className="flex justify-between text-xs">
+                          <span className="text-red-500">Lỗi: {k}</span>
+                          <span className="font-bold text-red-600">{v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              {(ticketA.receives[historySend.workshop] || []).filter(r => r.forSendId === historySend.id).length === 0 && (
+                <div className="text-center py-6 text-gray-400 text-xs">Chưa có dữ liệu nhận hàng</div>
+              )}
+            </div>
+          </div>
+        )}
       </Modal>
 
       <Modal 

@@ -74,7 +74,8 @@ service cloud.firestore {
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email', 'role']) &&
              data.uid is string && data.email is string &&
-             data.role in ['admin', 'manager', 'staff'];
+             data.role in ['admin', 'manager', 'staff'] &&
+             (!('fcmTokens' in data) || data.fcmTokens is list);
     }
 
     function isValidSettings(data) {
