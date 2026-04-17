@@ -52,7 +52,11 @@ import {
   getDocs,
   writeBatch,
   arrayUnion,
-  arrayRemove
+  arrayRemove,
+  addDoc,
+  serverTimestamp,
+  limit,
+  orderBy
 } from 'firebase/firestore';
 import { getToken, onMessage } from 'firebase/messaging';
 import { db, auth, messaging, firebaseConfig } from './firebase';
@@ -648,11 +652,59 @@ export default function App() {
     setTimeout(() => setToast(null), 2500);
     
     // Logic to decide when to show a native push-style notification
-    const importantKeywords = ["Đã xác nhận", "Đã nhận đủ", "Đã đăng ký", "nhân viên"];
+    const importantKeywords = ["Đã xác nhận", "Đã nhận đủ", "Đã đăng ký", "nhân viên", "Thông báo:"];
     if (importantKeywords.some(k => msg.includes(k))) {
       triggerNativeNotification("Otama Warehouse", msg);
     }
   };
+
+  const sendGlobalNotification = async (title: string, body: string) => {
+    if (!user) return;
+    try {
+      await addDoc(collection(db, 'notifications'), {
+        title,
+        body,
+        fromUid: user.uid,
+        fromName: userProfile?.name || user.email,
+        timestamp: serverTimestamp()
+      });
+    } catch (err) {
+      console.error("Error sending global notification:", err);
+    }
+  };
+
+  // Listen for global notifications
+  useEffect(() => {
+    if (!isAuthReady || !user) return;
+
+    // Only listen for notifications created AFTER the app started
+    const q = query(
+      collection(db, 'notifications'),
+      orderBy('timestamp', 'desc'),
+      limit(1)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === "added") {
+          const data = change.doc.data();
+          // Don't notify the sender themselves (they already got showToast)
+          if (data.fromUid !== user.uid) {
+            // Check if the timestamp is very recent (within last 30 seconds)
+            // This prevents "bursts" of old notifications on load
+            const now = Date.now();
+            const msgTime = data.timestamp?.toMillis ? data.timestamp.toMillis() : now;
+            
+            if (now - msgTime < 30000) {
+              showToast(`Thông báo: ${data.body}`);
+            }
+          }
+        }
+      });
+    });
+
+    return () => unsubscribe();
+  }, [isAuthReady, user]);
 
   // --- Date Navigation ---
   const changeDate = (newDate: string) => {
@@ -1525,6 +1577,10 @@ export default function App() {
                                               batch: send.batch,
                                               items: items
                                             });
+                                            sendGlobalNotification(
+                                              "Nhận hàng",
+                                              `${userProfile?.name || 'Nhân viên'} đã nhận đủ hàng từ xưởng ${send.workshop}`
+                                            );
                                             setModal(null);
                                             showToast(`Đã nhận đủ hàng từ ${send.workshop}`);
                                           }
@@ -2716,6 +2772,10 @@ export default function App() {
                   items: finalItems,
                   errors: finalErrors
                 });
+                sendGlobalNotification(
+                  "Cập nhật hàng",
+                  `${userProfile?.name || 'Nhân viên'} vừa cập nhật nhận ${sumValues(finalItems)} hàng từ ${receivingPartialSend.workshop}`
+                );
                 setModal(null);
                 showToast(`Đã cập nhật số lượng nhận từ ${receivingPartialSend.workshop}`);
               }}
@@ -2935,6 +2995,10 @@ export default function App() {
                   items: deliveryActual,
                   note: deliveryNote
                 });
+                sendGlobalNotification(
+                  "Giao hàng mới", 
+                  `${userProfile?.name || 'Quản lý'} vừa giao ${sumValues(deliveryActual)} hàng cho xưởng ${deliveringSend.workshop}`
+                );
                 setModal(null);
                 showToast("Đã xác nhận giao hàng");
               }}

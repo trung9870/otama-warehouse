@@ -49,9 +49,27 @@
         "workshops": { "type": "array", "items": { "type": "string" } },
         "types": { "type": "array", "items": { "type": "string" } }
       }
+    },
+    "Notification": {
+      "title": "Global Notification",
+      "description": "Cross-user broadcast signals",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "fromUid": { "type": "string" },
+        "fromName": { "type": "string" },
+        "type": { "type": "string" },
+        "timestamp": { "type": "object", "description": "Server Timestamp" }
+      },
+      "required": ["title", "body", "fromUid", "timestamp"]
     }
   },
   "firestore": {
+    "/notifications/{notifId}": {
+      "schema": "Notification",
+      "description": "Broadcast channel for cross-user notifications"
+    },
     "/users/{userId}": {
       "schema": "User",
       "description": "User profiles and permissions"

@@ -83,9 +83,20 @@ service cloud.firestore {
              data.workshops is list && data.types is list;
     }
 
+    function isValidNotification(data) {
+      return data.keys().hasAll(['title', 'body', 'fromUid', 'timestamp']) &&
+             data.title is string && data.body is string &&
+             data.fromUid is string && data.timestamp is timestamp;
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
+
+    match /notifications/{notifId} {
+      allow read: if isStaff();
+      allow create: if isStaff() && request.resource.data.fromUid == request.auth.uid && isValidNotification(request.resource.data);
+    }
 
     match /users/{userId} {
       allow get: if isAuthenticated();
