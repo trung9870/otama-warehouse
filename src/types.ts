@@ -59,6 +59,7 @@ export interface TicketBItem {
   realAllocation: number[] | null;
   actual: number | null;
   photoTaken: boolean;
+  photoUrl?: string;
   note: string;
   deliveries: Record<string, DeliveryInfo>;
 }

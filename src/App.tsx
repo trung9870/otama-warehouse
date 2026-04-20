@@ -60,7 +60,8 @@ import {
   orderBy
 } from 'firebase/firestore';
 import { getToken, onMessage } from 'firebase/messaging';
-import { db, auth, messaging, firebaseConfig } from './firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db, auth, messaging, storage, firebaseConfig } from './firebase';
 import { cn } from './lib/utils';
 import { Modal } from './components/Modal';
 import { 
@@ -633,7 +634,7 @@ export default function App() {
           icon: '/favicon.ico',
           badge: '/favicon.ico',
           vibrate: [200, 100, 200]
-        });
+        } as any);
       } catch (err) {
         if (navigator.serviceWorker && navigator.serviceWorker.ready) {
           navigator.serviceWorker.ready.then(registration => {
@@ -1655,113 +1656,132 @@ export default function App() {
               </div>
             </div>
 
-            {isAdmin && (
+            {isManager && (
               <>
-                {/* Workshops Management */}
-                <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
-                  <div className="p-4 border-b dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50 flex items-center justify-between">
-                    <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
-                      <Users className="w-4 h-4 text-blue-500" />
-                      Danh sách Xưởng
-                    </h3>
-                  </div>
-                  <div className="p-4 space-y-3">
-                    {settings.workshops.map((ws, idx) => (
-                      <div key={idx} className="flex items-center gap-2">
-                        <input 
-                          type="text"
-                          value={ws}
-                          onChange={(e) => {
-                            const newWs = [...settings.workshops];
-                            newWs[idx] = e.target.value;
-                            setSettings({ ...settings, workshops: newWs });
-                          }}
-                          className="flex-1 bg-gray-50 dark:bg-slate-800 border dark:border-slate-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none dark:text-white"
-                        />
-                        <button 
-                          onClick={() => {
-                            const newWs = settings.workshops.filter((_, i) => i !== idx);
-                            setSettings({ ...settings, workshops: newWs });
-                          }}
-                          className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    ))}
-                    <button 
-                      onClick={() => setSettings({ ...settings, workshops: [...settings.workshops, "Xưởng mới"] })}
-                      className="w-full py-4 border-2 border-dashed border-gray-200 dark:border-slate-800 rounded-2xl flex flex-col items-center justify-center gap-2 text-gray-500 dark:text-slate-400 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-all"
-                    >
-                      <Plus className="w-6 h-6" />
-                      <span className="text-sm font-bold">Thêm xưởng</span>
-                    </button>
-                  </div>
-                </div>
-
                 {/* Webhook Configuration */}
                 <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
                   <div className="p-4 border-b dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50 flex items-center justify-between">
                     <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
                       <Webhook className="w-4 h-4 text-green-500" />
-                      Cấu hình Webhook (n8n)
+                      Cấu hình Webhook (n8n / Zalo)
                     </h3>
                   </div>
                   <div className="p-4 space-y-3">
                     <div className="space-y-1">
                       <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">n8n Webhook URL</label>
                       <input 
-                        type="text"
+                        type="text" 
                         value={settings.webhookUrl || ""}
                         onChange={(e) => setSettings({ ...settings, webhookUrl: e.target.value })}
-                        placeholder="https://n8n.your-server.com/webhook/..."
+                        placeholder="Dán link Webhook n8n vào đây..."
                         className="w-full bg-gray-50 dark:bg-slate-800 border dark:border-slate-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none dark:text-white"
                       />
                     </div>
-                  </div>
-                </div>
-
-                {/* Types Management */}
-                <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
-                  <div className="p-4 border-b dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50 flex items-center justify-between">
-                    <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
-                      <Package className="w-4 h-4 text-purple-500" />
-                      Loại gia công
-                    </h3>
-                  </div>
-                  <div className="p-4 space-y-3">
-                    {settings.types.map((t, idx) => (
-                      <div key={idx} className="flex items-center gap-2">
-                        <input 
-                          type="text"
-                          value={t}
-                          onChange={(e) => {
-                            const newTypes = [...settings.types];
-                            newTypes[idx] = e.target.value;
-                            setSettings({ ...settings, types: newTypes });
-                          }}
-                          className="flex-1 bg-gray-50 dark:bg-slate-800 border dark:border-slate-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none dark:text-white"
-                        />
-                        <button 
-                          onClick={() => {
-                            const newTypes = settings.types.filter((_, i) => i !== idx);
-                            setSettings({ ...settings, types: newTypes });
-                          }}
-                          className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    ))}
+                    <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-xl border border-green-100 dark:border-green-800/30">
+                      <p className="text-[10px] text-green-700 dark:text-green-400 font-medium">
+                        Khi Giao/Nhận hàng, App sẽ gửi dữ liệu sang n8n qua link này. Bạn có thể dùng n8n để bắn tin tiếp sang Zalo hoặc Telegram.
+                      </p>
+                    </div>
                     <button 
-                      onClick={() => setSettings({ ...settings, types: [...settings.types, "Loại mới"] })}
-                      className="w-full py-2 border-2 border-dashed border-gray-200 dark:border-slate-800 rounded-xl text-xs font-bold text-gray-500 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-800 transition-all flex items-center justify-center gap-2"
+                      onClick={() => {
+                        triggerWebhook("TEST", { message: "Kiểm tra kết nối Webhook từ Otama Warehouse" });
+                        showToast("Đã gửi tín hiệu TEST sang n8n!");
+                      }}
+                      className="w-full py-2.5 bg-green-600 text-white text-xs font-bold rounded-xl shadow-md flex items-center justify-center gap-2 hover:bg-green-700 transition-all font-mono"
                     >
-                      <Plus className="w-4 h-4" />
-                      Thêm loại gia công
+                      <Send className="w-3 h-3" />
+                      TEST KẾT NỐI N8N
                     </button>
                   </div>
                 </div>
+
+                {isAdmin && (
+                  <>
+                    {/* Workshops Management */}
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
+                      <div className="p-4 border-b dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50 flex items-center justify-between">
+                        <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                          <Users className="w-4 h-4 text-blue-500" />
+                          Danh sách Xưởng
+                        </h3>
+                      </div>
+                      <div className="p-4 space-y-3">
+                        {settings.workshops.map((ws, idx) => (
+                          <div key={idx} className="flex items-center gap-2">
+                            <input 
+                              type="text"
+                              value={ws}
+                              onChange={(e) => {
+                                const newWs = [...settings.workshops];
+                                newWs[idx] = e.target.value;
+                                setSettings({ ...settings, workshops: newWs });
+                              }}
+                              className="flex-1 bg-gray-50 dark:bg-slate-800 border dark:border-slate-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none dark:text-white"
+                            />
+                            <button 
+                              onClick={() => {
+                                const newWs = settings.workshops.filter((_, i) => i !== idx);
+                                setSettings({ ...settings, workshops: newWs });
+                              }}
+                              className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ))}
+                        <button 
+                          onClick={() => setSettings({ ...settings, workshops: [...settings.workshops, "Xưởng mới"] })}
+                          className="w-full py-4 border-2 border-dashed border-gray-200 dark:border-slate-800 rounded-2xl flex flex-col items-center justify-center gap-2 text-gray-500 dark:text-slate-400 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-all"
+                        >
+                          <Plus className="w-6 h-6" />
+                          <span className="text-sm font-bold">Thêm xưởng</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Types Management */}
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden">
+                      <div className="p-4 border-b dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50 flex items-center justify-between">
+                        <h3 className="text-sm font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                          <Package className="w-4 h-4 text-purple-500" />
+                          Loại gia công
+                        </h3>
+                      </div>
+                      <div className="p-4 space-y-3">
+                        {settings.types.map((t, idx) => (
+                          <div key={idx} className="flex items-center gap-2">
+                            <input 
+                              type="text"
+                              value={t}
+                              onChange={(e) => {
+                                const newTypes = [...settings.types];
+                                newTypes[idx] = e.target.value;
+                                setSettings({ ...settings, types: newTypes });
+                              }}
+                              className="flex-1 bg-gray-50 dark:bg-slate-800 border dark:border-slate-700 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none dark:text-white"
+                            />
+                            <button 
+                              onClick={() => {
+                                const newTypes = settings.types.filter((_, i) => i !== idx);
+                                setSettings({ ...settings, types: newTypes });
+                              }}
+                              className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ))}
+                        <button 
+                          onClick={() => setSettings({ ...settings, types: [...settings.types, "Loại mới"] })}
+                          className="w-full py-2 border-2 border-dashed border-gray-200 dark:border-slate-800 rounded-xl text-xs font-bold text-gray-500 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-800 transition-all flex items-center justify-center gap-2"
+                        >
+                          <Plus className="w-4 h-4" />
+                          Thêm loại gia công
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </>
             )}
 
@@ -1805,7 +1825,8 @@ export default function App() {
                 )}
 
                 {notificationPermission === 'granted' && (
-                  <div className="space-y-2">
+                  <div className="space-y-2 pt-2 border-t border-gray-100 dark:border-slate-800/50">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Công cụ thông báo nội bộ</p>
                     <button 
                       onClick={async () => {
                         if (!messaging) return;
@@ -1817,25 +1838,28 @@ export default function App() {
                       }}
                       className="w-full py-2 bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-400 text-[10px] font-bold rounded-xl border border-dashed border-gray-300 dark:border-slate-700 hover:bg-gray-200 transition-all"
                     >
-                      Copy Token thiết bị (Dùng cho n8n)
+                      Copy Token thiết bị (Dùng cho n8n nâng cao)
                     </button>
                     
                     <button 
                       onClick={() => {
-                        sendGlobalNotification("Test Hệ Thống", "Sóng thông báo đang hoạt động bình thường! 📡");
-                        showToast("Đã bắn tín hiệu test!");
+                        sendGlobalNotification("Test Hệ Thống", "Sóng thông báo nội bộ đang hoạt động bình thường! 📡");
+                        showToast("Đã bắn tín hiệu nội bộ!");
                       }}
-                      className="w-full py-2 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 text-[10px] font-bold rounded-xl border border-blue-200 dark:border-blue-800/50 flex items-center justify-center gap-2 hover:bg-blue-600 hover:text-white transition-all"
+                      className="w-full py-2 bg-orange-50 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 text-[10px] font-bold rounded-xl border border-orange-200 dark:border-orange-800/50 flex items-center justify-center gap-2 hover:bg-orange-600 hover:text-white transition-all"
                     >
                       <Send className="w-3 h-3" />
-                      Gửi thông báo test toàn hệ thống
+                      Gửi sóng nội bộ (Test rung máy)
                     </button>
                   </div>
                 )}
 
-                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-100 dark:border-blue-800/30">
+                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-100 dark:border-blue-800/30 space-y-3">
                   <p className="text-[10px] text-blue-700 dark:text-blue-400 font-medium leading-relaxed">
-                    Mẹo: "Thêm vào màn hình chính" (Add to Home Screen) để trải nghiệm như ứng dụng thật và nhận thông báo ngay cả khi không mở trình duyệt.
+                    <b>Tích hợp Zalo qua n8n:</b> Để gửi tin nhắn thẳng vào Zalo, bạn hãy dán URL Webhook từ n8n vào mục phía trên. Mỗi khi có sự kiện (Giao hàng, Nhận hàng), ứng dụng sẽ tự động gọi n8n để bạn xử lý bắn tin Zalo.
+                  </p>
+                  <p className="text-[10px] text-blue-700 dark:text-blue-400 font-medium leading-relaxed">
+                    Mẹo PWA: "Thêm vào màn hình chính" để nhận thông báo Native ổn định nhất.
                   </p>
                 </div>
               </div>
@@ -2085,27 +2109,106 @@ export default function App() {
                               isItemDone ? "bg-white border-gray-200" : "bg-blue-50/30 border-blue-100"
                             )}>
                               <div className="flex gap-3">
-                                <button 
-                                  onClick={() => {
-                                    updateData(prev => ({
-                                      ticketsB: {
-                                        ...prev.ticketsB,
-                                        [currentDate]: {
-                                          ...ticketB,
-                                          items: ticketB.items.map(i => i.sku === item.sku ? { ...i, photoTaken: true } : i)
+                                <div className="flex flex-col gap-1 items-center shrink-0">
+                                  <label 
+                                    className={cn(
+                                      "cursor-pointer w-12 h-12 rounded-xl border-2 flex flex-col items-center justify-center gap-0.5 transition-all relative overflow-hidden",
+                                      item.photoTaken ? "bg-green-50 border-green-500 text-green-600" : "bg-gray-50 border-dashed border-gray-300 text-gray-400 hover:bg-gray-100"
+                                    )}
+                                  >
+                                    <input 
+                                      type="file" 
+                                      accept="image/*" 
+                                      capture="environment" 
+                                      className="hidden"
+                                      onChange={async (e) => {
+                                        const file = e.target.files?.[0];
+                                        if (!file) return;
+                                        
+                                        if (!storage) {
+                                           showToast("Hệ thống lưu trữ ảnh chưa được kích hoạt!");
+                                           return;
                                         }
-                                      }
-                                    }));
-                                    showToast("Đã chụp ảnh sản phẩm");
-                                  }}
-                                  className={cn(
-                                    "w-12 h-12 rounded-xl border-2 flex flex-col items-center justify-center gap-0.5 transition-all shrink-0",
-                                    item.photoTaken ? "bg-green-50 border-green-500 text-green-600" : "bg-gray-50 border-dashed border-gray-300 text-gray-400"
+
+                                        showToast("Đang xử lý & tải ảnh...");
+                                        try {
+                                          // --- Image Compression Logic ---
+                                          const compressedBlob = await new Promise<Blob>((resolve) => {
+                                            const reader = new FileReader();
+                                            reader.readAsDataURL(file);
+                                            reader.onload = (event) => {
+                                              const img = new Image();
+                                              img.src = event.target?.result as string;
+                                              img.onload = () => {
+                                                const canvas = document.createElement('canvas');
+                                                let width = img.width;
+                                                let height = img.height;
+                                                
+                                                // Resize to max 1200px width/height to save space
+                                                const maxDim = 1200;
+                                                if (width > height) {
+                                                  if (width > maxDim) {
+                                                    height *= maxDim / width;
+                                                    width = maxDim;
+                                                  }
+                                                } else {
+                                                  if (height > maxDim) {
+                                                    width *= maxDim / height;
+                                                    height = maxDim;
+                                                  }
+                                                }
+                                                
+                                                canvas.width = width;
+                                                canvas.height = height;
+                                                const ctx = canvas.getContext('2d');
+                                                ctx?.drawImage(img, 0, 0, width, height);
+                                                
+                                                // Convert to JPEG with 0.7 quality (300KB-500KB average)
+                                                canvas.toBlob((blob) => {
+                                                  if (blob) resolve(blob);
+                                                }, 'image/jpeg', 0.7);
+                                              };
+                                            };
+                                          });
+
+                                          const storageRef = ref(storage, `photos/${currentDate}/ticketB_${ticketB.id}_${item.sku}_${Date.now()}.jpg`);
+                                          await uploadBytes(storageRef, compressedBlob);
+                                          const photoUrl = await getDownloadURL(storageRef);
+                                          // --- End Compression Logic ---
+                                          
+                                          updateData(prev => ({
+                                            ticketsB: {
+                                              ...prev.ticketsB,
+                                              [currentDate]: {
+                                                ...ticketB,
+                                                items: ticketB.items.map(i => i.sku === item.sku ? { ...i, photoTaken: true, photoUrl } : i)
+                                              }
+                                            }
+                                          }));
+                                          showToast("Đã lưu ảnh sản phẩm!");
+                                        } catch (err) {
+                                          console.error(err);
+                                          showToast("Lỗi khi tải ảnh lên!");
+                                        }
+                                      }}
+                                    />
+                                    {item.photoUrl && (
+                                      <img src={item.photoUrl} alt="" className="absolute inset-0 w-full h-full object-cover opacity-30" />
+                                    )}
+                                    <div className="z-10 flex flex-col items-center">
+                                      {item.photoTaken ? <Check className="w-5 h-5" /> : <Camera className="w-5 h-5" />}
+                                      <span className="text-[8px] font-bold uppercase">Ảnh</span>
+                                    </div>
+                                  </label>
+                                  {item.photoUrl && (
+                                    <button 
+                                      onClick={() => window.open(item.photoUrl, '_blank')}
+                                      className="text-[9px] text-blue-600 font-bold hover:underline"
+                                    >
+                                      Xem ảnh
+                                    </button>
                                   )}
-                                >
-                                  {item.photoTaken ? <Check className="w-5 h-5" /> : <Camera className="w-5 h-5" />}
-                                  <span className="text-[8px] font-bold uppercase">Ảnh</span>
-                                </button>
+                                </div>
                                 <div className="flex-1 min-w-0">
                                   <h4 className="font-bold text-sm text-gray-900 leading-tight">{item.name}</h4>
                                   <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold tracking-wider">
@@ -3337,6 +3440,14 @@ export default function App() {
                     }
                   }
                   return nextData;
+                });
+                triggerWebhook('ITEM_CHECK', {
+                  sku: item.sku,
+                  name: item.name,
+                  requested: item.requested,
+                  actual: editActual,
+                  note: editNote,
+                  batch: item.batch
                 });
                 setModal(null);
                 showToast("Đã cập nhật số thực tế");
