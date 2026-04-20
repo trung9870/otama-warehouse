@@ -2215,7 +2215,7 @@ export default function App() {
                                   </label>
                                   {item.photoUrl && (
                                     <button 
-                                      onClick={() => window.open(item.photoUrl, '_blank')}
+                                      onClick={() => setModal({ type: 'previewImage', url: item.photoUrl, name: item.name })}
                                       className="text-[9px] text-blue-600 font-bold hover:underline"
                                     >
                                       Xem ảnh
@@ -3783,6 +3783,37 @@ export default function App() {
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal 
+        isOpen={modal?.type === 'previewImage'} 
+        onClose={() => setModal(null)}
+        title={modal?.name || "Xem ảnh sản phẩm"}
+        maxWidth="max-w-2xl"
+      >
+        <div className="flex flex-col items-center gap-4 py-2">
+          <div className="relative w-full aspect-square md:aspect-video bg-gray-100 rounded-xl overflow-hidden shadow-inner flex items-center justify-center">
+            {modal?.url ? (
+              <img 
+                src={modal.url} 
+                alt="Product Preview" 
+                className="w-full h-full object-contain"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="flex flex-col items-center gap-2 text-gray-400">
+                <Camera className="w-8 h-8 opacity-20" />
+                <span className="text-xs">Không có dữ liệu ảnh</span>
+              </div>
+            )}
+          </div>
+          <button 
+            onClick={() => setModal(null)}
+            className="w-full py-3 bg-gray-900 text-white font-bold rounded-xl active:scale-95 transition-transform"
+          >
+            Đóng
+          </button>
+        </div>
       </Modal>
 
       <Modal 
