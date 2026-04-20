@@ -2132,20 +2132,22 @@ export default function App() {
 
                                         showToast("Đang xử lý & tải ảnh...");
                                         try {
-                                          // --- Image Compression Logic ---
-                                          const compressedBlob = await new Promise<Blob>((resolve) => {
+                                          // --- Image Compression Logic with Error Handling ---
+                                          const compressedBlob = await new Promise<Blob>((resolve, reject) => {
                                             const reader = new FileReader();
+                                            reader.onerror = () => reject(new Error("Không thể đọc file từ thiết bị"));
                                             reader.readAsDataURL(file);
                                             reader.onload = (event) => {
                                               const img = new Image();
+                                              img.onerror = () => reject(new Error("Lỗi khi nén ảnh"));
                                               img.src = event.target?.result as string;
                                               img.onload = () => {
                                                 const canvas = document.createElement('canvas');
                                                 let width = img.width;
                                                 let height = img.height;
                                                 
-                                                // Resize to max 1200px width/height to save space
-                                                const maxDim = 1200;
+                                                // Nén xuống tối đa 1000px để cực kỳ nhẹ
+                                                const maxDim = 1000;
                                                 if (width > height) {
                                                   if (width > maxDim) {
                                                     height *= maxDim / width;
@@ -2161,20 +2163,31 @@ export default function App() {
                                                 canvas.width = width;
                                                 canvas.height = height;
                                                 const ctx = canvas.getContext('2d');
-                                                ctx?.drawImage(img, 0, 0, width, height);
+                                                if (!ctx) {
+                                                  reject(new Error("Trình duyệt không hỗ trợ xử lý ảnh"));
+                                                  return;
+                                                }
+                                                ctx.drawImage(img, 0, 0, width, height);
                                                 
-                                                // Convert to JPEG with 0.7 quality (300KB-500KB average)
                                                 canvas.toBlob((blob) => {
-                                                  if (blob) resolve(blob);
-                                                }, 'image/jpeg', 0.7);
+                                                  if (blob) {
+                                                    resolve(blob);
+                                                  } else {
+                                                    reject(new Error("Lỗi tạo dữ liệu ảnh nén"));
+                                                  }
+                                                }, 'image/jpeg', 0.6); // Giảm xuống 0.6 để cực nhẹ (~150-200KB)
                                               };
                                             };
                                           });
 
-                                          const storageRef = ref(storage, `photos/${currentDate}/ticketB_${ticketB.id}_${item.sku}_${Date.now()}.jpg`);
-                                          await uploadBytes(storageRef, compressedBlob);
-                                          const photoUrl = await getDownloadURL(storageRef);
-                                          // --- End Compression Logic ---
+                                          // Create a safe path for storage
+                                          const safePath = `photos/${currentDate.replace(/\//g, '-')}`;
+                                          const fileName = `item_${item.sku}_${Date.now()}.jpg`;
+                                          const storageRef = ref(storage, `${safePath}/${fileName}`);
+                                          
+                                          const uploadResult = await uploadBytes(storageRef, compressedBlob);
+                                          const photoUrl = await getDownloadURL(uploadResult.ref);
+                                          // --- End Logic ---
                                           
                                           updateData(prev => ({
                                             ticketsB: {
