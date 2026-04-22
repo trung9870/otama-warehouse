@@ -145,6 +145,8 @@ export default function App() {
   const [isCreatingStaff, setIsCreatingStaff] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [historySend, setHistorySend] = useState<SendOperation | null>(null);
+  const [isEditingSendItems, setIsEditingSendItems] = useState(false);
+  const [editSendItemsMap, setEditSendItemsMap] = useState<Record<string, number>>({});
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
 
   // Derived data
@@ -1442,12 +1444,12 @@ export default function App() {
                             <>
                               <th className="p-3 font-semibold text-gray-500 dark:text-slate-400">Về A</th>
                               <th className="w-0 p-0 text-gray-200 dark:text-slate-700 font-normal">|</th>
-                              <th className="p-3 font-semibold text-gray-500 dark:text-slate-400 text-center">
+                              <th className="p-3 font-bold text-blue-600 dark:text-blue-400 text-center">
                                 <Home className="w-3.5 h-3.5 mx-auto" />
                               </th>
                             </>
                           ) : (
-                            <th className="p-3 font-semibold text-amber-600 dark:text-amber-400 bg-amber-50/30 dark:bg-amber-900/10">{d}</th>
+                            <th className="p-3 font-bold text-gray-900 dark:text-white">{d}</th>
                           )}
                         </React.Fragment>
                       ))}
@@ -1489,15 +1491,21 @@ export default function App() {
                                   <div className="h-4 w-[1px] bg-gray-100 dark:bg-slate-800 mx-auto" />
                                 </td>
                               )}
-                              <td className={cn(
-                                "p-3 text-center",
-                                v.isWorkshop && "bg-amber-50/20 dark:bg-amber-900/5"
-                              )}>
+                              <td className="p-3 text-center">
                                 {!showReceivedProgress ? (
-                                  <span className="text-gray-600 dark:text-slate-400">{v.sent || 0}</span>
+                                  <span className={cn(
+                                    v.isSub ? "text-blue-600 dark:text-blue-400 font-bold" : 
+                                    v.isWorkshop ? "text-gray-900 dark:text-white font-bold" : 
+                                    "text-gray-600 dark:text-slate-400"
+                                  )}>{v.sent || 0}</span>
                                 ) : (
                                   <div className="flex flex-col items-center">
-                                    <span className="text-gray-900 dark:text-white font-bold">{v.sent || 0}</span>
+                                    <span className={cn(
+                                      "font-bold",
+                                      v.isSub ? "text-blue-600 dark:text-blue-400" : 
+                                      v.isWorkshop ? "text-gray-900 dark:text-white" :
+                                      "text-gray-900 dark:text-white"
+                                    )}>{v.sent || 0}</span>
                                     <div className="w-full h-[1px] bg-gray-200 dark:bg-slate-700 my-0.5" />
                                     <span className={cn(
                                       "font-bold",
@@ -1562,7 +1570,7 @@ export default function App() {
                                 <td className="p-0 align-middle">
                                   <div className="h-4 w-[1px] bg-gray-200 dark:bg-slate-700 mx-auto" />
                                 </td>
-                                <td className="p-3 text-center dark:text-white">
+                                <td className="p-3 text-center text-blue-600 dark:text-blue-400">
                                   {!showReceivedProgress ? sentHome : (
                                     <div className="flex flex-col items-center">
                                       <span>{sentHome}</span>
@@ -1573,7 +1581,7 @@ export default function App() {
                                 </td>
                               </>
                             ) : (
-                              <td className="p-3 text-center dark:text-white bg-amber-50/30 dark:bg-amber-900/10">
+                              <td className="p-3 text-center text-gray-900 dark:text-white">
                                 {!showReceivedProgress ? sentReg : (
                                   <div className="flex flex-col items-center">
                                     <span>{sentReg}</span>
@@ -1663,7 +1671,7 @@ export default function App() {
                 </button>
                 <button 
                   onClick={() => setShowHomeMay(true)}
-                  className="flex-1 py-4 border-2 border-dashed border-amber-300 dark:border-amber-900/30 rounded-2xl flex flex-col items-center justify-center gap-2 text-amber-600 dark:text-amber-400 hover:border-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/10 transition-all"
+                  className="flex-1 py-4 border-2 border-dashed border-blue-300 dark:border-blue-900/30 rounded-2xl flex flex-col items-center justify-center gap-2 text-blue-600 dark:text-blue-400 hover:border-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-all"
                 >
                   <Home className="w-6 h-6" />
                   <span className="text-sm font-bold">May ở nhà</span>
@@ -4181,16 +4189,101 @@ export default function App() {
 
       <Modal
         isOpen={modal?.type === 'receiveHistory'}
-        onClose={() => setModal(null)}
+        onClose={() => { setModal(null); setIsEditingSendItems(false); }}
         title="Lịch sử nhận hàng"
-        footer={<button onClick={() => setModal(null)} className="w-full py-3 bg-gray-100 text-gray-600 font-bold rounded-xl">Đóng</button>}
+        footer={<button onClick={() => { setModal(null); setIsEditingSendItems(false); }} className="w-full py-3 bg-gray-100 text-gray-600 font-bold rounded-xl">Đóng</button>}
       >
         {historySend && (
           <div className="space-y-4">
             <div className="bg-gray-50 dark:bg-slate-900 p-3 rounded-xl border dark:border-slate-800">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Xưởng</p>
-              <h4 className="text-lg font-bold text-gray-900 dark:text-white">{historySend.workshop}</h4>
-              <p className="text-xs text-gray-500 mt-0.5">Lần {historySend.batch} · Tổng giao: {sumValues(historySend.actualItems || historySend.items)}</p>
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Xưởng</p>
+                  <h4 className="text-lg font-bold text-gray-900 dark:text-white">{historySend.workshop}</h4>
+                  <p className="text-xs text-gray-500 mt-0.5">Lần {historySend.batch} · Tổng giao: {sumValues(historySend.actualItems || historySend.items)}</p>
+                </div>
+                {!isEditingSendItems ? (
+                  isAdmin && (
+                    <button 
+                      onClick={() => {
+                        setEditSendItemsMap({ ...(historySend.actualItems || historySend.items) });
+                        setIsEditingSendItems(true);
+                      }}
+                      className="p-2 text-blue-600 bg-blue-50 dark:bg-blue-900/20 dark:text-blue-400 rounded-lg hover:bg-blue-100 transition-colors"
+                      title="Sửa số lượng"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                  )
+                ) : (
+                  <button 
+                    onClick={() => setIsEditingSendItems(false)}
+                    className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+
+              {isEditingSendItems && (
+                <div className="mt-4 pt-4 border-t dark:border-slate-800 space-y-3 animate-in fade-in duration-200">
+                  {settings.types.map(t => (
+                    <div key={t} className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-gray-700 dark:text-slate-300">{t}</span>
+                      <input 
+                        type="number"
+                        className="w-20 bg-white dark:bg-slate-950 border dark:border-slate-700 rounded-lg px-2 py-1 text-center font-bold outline-none focus:ring-2 focus:ring-blue-500"
+                        value={editSendItemsMap[t] || ""}
+                        onChange={e => {
+                          const val = Math.max(0, parseInt(e.target.value) || 0);
+                          setEditSendItemsMap(prev => {
+                            const next = { ...prev };
+                            if (val > 0) next[t] = val;
+                            else delete next[t];
+                            return next;
+                          });
+                        }}
+                      />
+                    </div>
+                  ))}
+                  <button 
+                    onClick={() => {
+                      updateData(prev => {
+                        const ticket = prev.ticketsA[currentDate];
+                        if (!ticket) return prev;
+                        const newSends = ticket.sends.map(s => {
+                          if (s.id === historySend.id) {
+                            const updated = { ...s, items: { ...editSendItemsMap } };
+                            if (updated.actualItems) {
+                              updated.actualItems = { ...editSendItemsMap };
+                            }
+                            return updated;
+                          }
+                          return s;
+                        });
+                        return {
+                          ...prev,
+                          ticketsA: {
+                            ...prev.ticketsA,
+                            [currentDate]: { ...ticket, sends: newSends }
+                          }
+                        };
+                      });
+                      
+                      const updatedSend = { ...historySend, items: { ...editSendItemsMap } };
+                      if (updatedSend.actualItems) {
+                        updatedSend.actualItems = { ...editSendItemsMap };
+                      }
+                      setHistorySend(updatedSend);
+                      setIsEditingSendItems(false);
+                      showToast("Đã cập nhật số lượng giao");
+                    }}
+                    className="w-full mt-2 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-sm transition-colors"
+                  >
+                    Lưu số lượng
+                  </button>
+                </div>
+              )}
             </div>
             
             <div className="space-y-3">
