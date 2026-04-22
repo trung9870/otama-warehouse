@@ -21,6 +21,7 @@ import {
   LogOut,
   Moon,
   Sun,
+  Home,
   Eye,
   EyeOff,
   ListChecks,
@@ -96,14 +97,16 @@ export default function App() {
   const triggerWebhook = async (action: string, data: any) => {
     if (!settings.webhookUrl) return;
     try {
+      const now = new Date();
+      const formattedDate = now.toLocaleDateString("vi-VN") + " " + now.toLocaleTimeString("vi-VN");
+      
       await fetch(settings.webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action,
-          timestamp: new Date().toISOString(),
-          user: user?.email || userProfile?.name,
-          data
+          action_name: action,
+          timestamp: formattedDate,
+          ...data
         })
       });
     } catch (err) {
@@ -418,13 +421,14 @@ export default function App() {
           // Sync Settings
           unsubSettings = onSnapshot(doc(db, 'settings', 'global'), (snap) => {
             if (snap.exists()) {
-              setSettings(snap.data() as any);
+              setSettings(prev => ({ ...prev, ...snap.data() }));
             } else {
               // Initialize settings if not exists (only if admin)
               if (u.email === 'trungg9870@gmail.com') {
                 setDoc(doc(db, 'settings', 'global'), {
                   workshops: WORKSHOPS,
-                  types: TYPES
+                  types: TYPES,
+                  webhookUrl: ''
                 }).catch(err => handleFirestoreError(err, OperationType.WRITE, 'settings/global'));
               }
             }
@@ -723,7 +727,9 @@ export default function App() {
 
   // --- Phiếu A Logic ---
   const [showAddSend, setShowAddSend] = useState(false);
+  const [showHomeMay, setShowHomeMay] = useState(false);
   const [newSendItems, setNewSendItems] = useState<Record<string, number[]>>({});
+  const [homeMayItems, setHomeMayItems] = useState<Record<string, number>>({});
   const [deliveringSend, setDeliveringSend] = useState<SendOperation | null>(null);
   const [deliveryActual, setDeliveryActual] = useState<Record<string, number>>({});
   const [deliveryNote, setDeliveryNote] = useState("");
@@ -778,6 +784,65 @@ export default function App() {
     showToast(`Đã thêm L${nextBatch} — ${totalAdded} chiếc cho ${newSends.length} xưởng`);
   };
 
+  const submitHomeMay = () => {
+    const time = new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+    const nextId = Math.max(0, ...ticketA.sends.map(s => s.id)) + 1;
+    const nextBatch = Math.max(0, ...ticketA.sends.map(s => s.batch || 1)) + 1;
+    
+    const items: Record<string, number> = {};
+    ["Bo chun", "Ôm"].forEach(t => {
+      const v = homeMayItems[t] || 0;
+      if (v > 0) items[t] = v;
+    });
+    
+    if (Object.keys(items).length === 0) return;
+    
+    const newSend: SendOperation = {
+        id: nextId,
+        batch: nextBatch,
+        source: "A",
+        workshop: "Về A",
+        time,
+        items,
+        delivered: true,
+        deliveredAt: time,
+        deliveredBy: userProfile?.displayName || userProfile?.name || "Bạn",
+        workshopIdx: 0,
+        isHome: true
+    };
+    
+    const newReceive: ReceiveOperation = {
+        id: nextId,
+        time,
+        by: userProfile?.displayName || userProfile?.name || "Bạn",
+        items: { ...items },
+        errors: {},
+        forSendId: nextId
+    };
+
+    updateData(prev => {
+        const currentTicketA = prev.ticketsA[currentDate] || ticketA;
+        const currentReceives = currentTicketA.receives["Về A"] || [];
+        return {
+            ticketsA: {
+                ...prev.ticketsA,
+                [currentDate]: {
+                    ...currentTicketA,
+                    sends: [...currentTicketA.sends, newSend],
+                    receives: {
+                        ...currentTicketA.receives,
+                        ["Về A"]: [...currentReceives, newReceive]
+                    }
+                }
+            }
+        };
+    });
+    
+    setShowHomeMay(false);
+    setHomeMayItems({});
+    showToast(`Đã ghi nhận may ở nhà: ${sumValues(items)} chiếc`);
+  };
+
   // --- Phiếu B Logic ---
   const [productForm, setProductForm] = useState<{ mode: 'add' | 'edit', batch?: number, sku?: string } | null>(null);
   const [formProductSku, setFormProductSku] = useState("");
@@ -820,10 +885,10 @@ export default function App() {
 
   const sumValues = (obj: Record<string, number>) => (Object.values(obj) as number[]).reduce((a, b) => a + b, 0);
 
-  const getSendStatus = (send: SendOperation) => {
+  const getSendStatus = (send: SendOperation, tA: TicketA = ticketA) => {
     const sentItems = send.actualItems || send.items;
     const sentTotal = sumValues(sentItems);
-    const receivesForSend = (ticketA.receives[send.workshop] || []).filter(r => r.forSendId === send.id);
+    const receivesForSend = (tA.receives[send.workshop] || []).filter(r => r.forSendId === send.id);
     let recvTotal = 0;
     receivesForSend.forEach(r => {
       recvTotal += sumValues(r.items);
@@ -832,6 +897,185 @@ export default function App() {
     if (recvTotal === 0) return { status: "pending", recvTotal, sentTotal };
     if (recvTotal >= sentTotal) return { status: "done", recvTotal, sentTotal };
     return { status: "partial", recvTotal, sentTotal };
+  };
+
+  const getWorkshopDailyStats = (workshop: string, tA: TicketA = ticketA) => {
+    const workshopSends = tA.sends.filter(s => s.workshop === workshop && s.delivered);
+    const workshopReceives = tA.receives[workshop] || [];
+    
+    let dailySentTotal = 0;
+    const dailyItemsSent: Record<string, number> = {};
+    
+    workshopSends.forEach(s => {
+      const items = s.actualItems || s.items;
+      Object.entries(items).forEach(([k, v]) => {
+        dailyItemsSent[k] = (dailyItemsSent[k] || 0) + (v as number);
+        dailySentTotal += (v as number);
+      });
+    });
+
+    let dailyReceivedTotal = 0;
+    const dailyItemsReceived: Record<string, number> = {};
+    workshopReceives.forEach(r => {
+      Object.entries(r.items).forEach(([k, v]) => {
+        dailyItemsReceived[k] = (dailyItemsReceived[k] || 0) + (v as number);
+        dailyReceivedTotal += (v as number);
+      });
+      Object.entries(r.errors || {}).forEach(([k, v]) => {
+        dailyItemsReceived[k] = (dailyItemsReceived[k] || 0) + (v as number);
+        dailyReceivedTotal += (v as number);
+      });
+    });
+
+    return {
+      dailySent: dailySentTotal,
+      dailyReceived: dailyReceivedTotal,
+      dailyRemaining: dailySentTotal - dailyReceivedTotal,
+      dailyItemsSent,
+      dailyItemsReceived
+    };
+  };
+
+  const getWebhookPayload = (send: SendOperation, justReceivedItems: Record<string, number> | null = null, isFull: boolean = false, tA: TicketA = ticketA, isUndo: boolean = false) => {
+    const status = getSendStatus(send, tA);
+    const daily = getWorkshopDailyStats(send.workshop, tA);
+    const batchSentItems = send.actualItems || send.items;
+    
+    // Calculate current batch progress
+    let currentRecvTotal = status.recvTotal;
+    if (justReceivedItems) {
+      currentRecvTotal += sumValues(justReceivedItems);
+    }
+    if (isFull) {
+       currentRecvTotal = status.sentTotal;
+    }
+
+    const getOrderIdx = (name: string) => {
+      const n = name.toLowerCase();
+      if (n.includes('bo')) return 1;
+      if (n.includes('chăn') || n.includes('lót')) return 2;
+      if (n.includes('ôm')) return 3;
+      if (n.includes('ga trần') || n.includes('ga.tr')) return 4;
+      return 5;
+    };
+
+    const activeItems = Object.entries(batchSentItems)
+      .filter(([_, v]) => (v as number) > 0)
+      .sort(([a], [b]) => getOrderIdx(a) - getOrderIdx(b));
+    
+    let itemDetails = "";
+    if (activeItems.length > 0) {
+      const shortName = (name: string) => {
+        const n = name.toLowerCase();
+        if (n.includes('bo')) return 'Bo';
+        if (n.includes('chăn')) return 'Chăn';
+        if (n.includes('lót')) return 'Lót';
+        if (n.includes('ôm')) return 'Ôm';
+        if (n.includes('ga trần')) return 'GaTr';
+        return name.substring(0, 4);
+      };
+
+      // Dùng Figure Space (\u2007) để đệm số, vì nó có độ rộng vật lý chính xác bằng 1 con số
+      const padNum = (num: number, maxDigits: number) => {
+        const s = String(num);
+        const padding = Math.max(0, maxDigits - s.length);
+        return '\u2007'.repeat(padding) + s;
+      };
+
+      const headerPad = (str: string, len: number) => {
+        const padding = Math.max(0, len - str.length);
+        const left = Math.floor(padding / 2);
+        const right = padding - left;
+        return ' '.repeat(left) + str + ' '.repeat(right);
+      };
+
+      // prefixes phải có độ rộng vật lý tương đương trên Zalo
+      // "Tổng  " (4 chữ + 2 cách) và "Lấy📌 " (3 chữ + icon + 1 cách)
+      let headerRow = "      |"; 
+      let totalRow  = "Tổng  |";
+      let recvRow   = "Lấy📌 |";
+      let remRow    = "Còn   |";
+
+      const addedStrs: string[] = [];
+
+      activeItems.forEach(([k, totalStr], i) => {
+        const total = totalStr as number;
+        let previousRecv = 0;
+        (tA.receives[send.workshop] || []).filter(r => r.forSendId === send.id).forEach(r => {
+          previousRecv += (r.items[k] || 0) + (r.errors?.[k] || 0);
+        });
+        
+        let currentVal = 0;
+        let cumulativeVal = previousRecv;
+        
+        if (isFull) {
+          currentVal = Math.max(0, total - previousRecv);
+          cumulativeVal = total;
+        } else if (justReceivedItems && justReceivedItems[k]) {
+          currentVal = justReceivedItems[k];
+          cumulativeVal = previousRecv + currentVal;
+          const mark = isUndo ? "-" : "+";
+          addedStrs.push(`${shortName(k)} ${mark}${Math.abs(currentVal)}`);
+        }
+        
+        const rem = Math.max(0, total - cumulativeVal);
+
+        // Độ rộng cột dựa trên tên hoặc số lượng chữ số
+        const maxDigits = Math.max(String(total).length, 2); 
+        const colWidth = Math.max(shortName(k).length, maxDigits);
+
+        // Header column
+        headerRow += headerPad(shortName(k), colWidth) + " |";
+        
+        // Data padding logic
+        const spacePadding = Math.max(0, colWidth - maxDigits);
+        const leftSp = ' '.repeat(Math.floor(spacePadding / 2));
+        const rightSp = ' '.repeat(Math.ceil(spacePadding / 2));
+
+        totalRow += " " + leftSp + padNum(total, maxDigits) + rightSp + " |";
+        // Bỏ dấu * bôi đậm vì Zalo không hỗ trợ trong bảng
+        recvRow  += " " + leftSp + padNum(currentVal, maxDigits) + rightSp + " |";
+        remRow   += " " + leftSp + padNum(rem, maxDigits) + rightSp + " |";
+      });
+
+      // Tạo các dòng thực sự (Real newlines)
+      itemDetails = `${headerRow}\n${totalRow}\n${recvRow}\n${remRow}`;
+
+      if (addedStrs.length > 0) {
+         itemDetails += `\n*(Vừa: ${addedStrs.join(", ")})*`;
+      }
+    }
+
+    let actionStatus = "";
+    if (isUndo) {
+      actionStatus = "♻️ Hoàn tác";
+    } else if (isFull) {
+      actionStatus = "📥 Lấy hết";
+    } else if (justReceivedItems) {
+      actionStatus = "📥 Lấy 1 phần";
+    } else {
+      actionStatus = "🚚 Gửi hàng";
+    }
+
+    const dailySent = daily.dailySent;
+    const dailyReceived = daily.dailyReceived + (justReceivedItems && !isFull ? sumValues(justReceivedItems) : 0);
+    // Note: if isFull is true, dailyStats already includes some part, but confirmFullReceive passes the 'items' which is 'rem'.
+    // So sumValues(justReceivedItems) is correct for the increment.
+    
+    const receivedNowText = isUndo ? `🔄 Vừa hoàn tác: ${sumValues(justReceivedItems || {})} cái (đã trừ khỏi tổng)` : justReceivedItems ? `📥 Vừa nhận thêm: +${sumValues(justReceivedItems)} cái` : "";
+
+    return {
+      status: actionStatus,
+      workshop: send.workshop,
+      batch_info: `Lần ${send.batch} (Giao ${send.deliveredAt || send.time}): Lấy ${currentRecvTotal}/${status.sentTotal} (Còn: ${Math.max(0, status.sentTotal - currentRecvTotal)})`,
+      item_details: itemDetails,
+      daily_sent: dailySent,
+      daily_received: isFull ? daily.dailyReceived + sumValues(justReceivedItems || {}) : dailyReceived,
+      daily_remaining: isFull ? dailySent - (daily.dailyReceived + sumValues(justReceivedItems || {})) : dailySent - dailyReceived,
+      received_now: justReceivedItems ? sumValues(justReceivedItems) : 0,
+      received_now_text: receivedNowText,
+      items: justReceivedItems || batchSentItems 
+    };
   };
 
   const undoReceive = (send: SendOperation) => {
@@ -845,6 +1089,8 @@ export default function App() {
     }
     
     const actualIndex = wsReceives.length - 1 - lastIndex;
+    const removedReceive = wsReceives[actualIndex];
+    
     const newWsReceives = [...wsReceives];
     newWsReceives.splice(actualIndex, 1);
     
@@ -852,6 +1098,23 @@ export default function App() {
       ...tA.receives,
       [send.workshop]: newWsReceives
     };
+
+    // Chuẩn bị item âm để gửi webhook
+    const negatedItems: Record<string, number> = {};
+    Object.entries(removedReceive.items).forEach(([k, v]) => {
+      negatedItems[k] = -(v as number);
+    });
+
+    const payload = getWebhookPayload(send, negatedItems, false, tA, true);
+    const webhookId = `UNDO-${send.workshop}-${send.batch}-${currentDate}-${actualIndex}`.replace(/\s+/g, '-');
+    triggerWebhook('HOÀN TÁC', {
+      id: webhookId,
+      action: "⚠️ ĐÍNH CHÍNH & HOÀN TÁC",
+      status: "Hủy bỏ lượt nhận hàng",
+      ...payload,
+      date: currentDate,
+      user: userProfile?.displayName || userProfile?.name || "Bạn"
+    });
 
     setState(prev => ({
       ...prev,
@@ -1173,50 +1436,86 @@ export default function App() {
                   <thead>
                     <tr className="border-b dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50">
                       <th className="text-left p-3 font-semibold text-gray-500 dark:text-slate-400">Loại</th>
-                      {destinations.map(d => <th key={d} className="p-3 font-semibold text-gray-500 dark:text-slate-400">{d}</th>)}
-                      <th className="p-3 font-bold text-blue-600 dark:text-blue-400">Tổng</th>
+                      {destinations.map(d => (
+                        <React.Fragment key={d}>
+                          {d === "Về A" ? (
+                            <>
+                              <th className="p-3 font-semibold text-gray-500 dark:text-slate-400">Về A</th>
+                              <th className="w-0 p-0 text-gray-200 dark:text-slate-700 font-normal">|</th>
+                              <th className="p-3 font-semibold text-gray-500 dark:text-slate-400 text-center">
+                                <Home className="w-3.5 h-3.5 mx-auto" />
+                              </th>
+                            </>
+                          ) : (
+                            <th className="p-3 font-semibold text-amber-600 dark:text-amber-400 bg-amber-50/30 dark:bg-amber-900/10">{d}</th>
+                          )}
+                        </React.Fragment>
+                      ))}
+                      <th className="p-3 font-bold text-blue-600 dark:text-blue-400 border-l dark:border-slate-800">Tổng</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y dark:divide-slate-800">
                     {settings.types.map(t => {
-                      const rowData = destinations.map((dest, dIdx) => {
-                        const sends = ticketA.sends.filter(s => (s.workshopIdx === dIdx || s.workshop === dest) && s.delivered);
-                        const sent = sends.reduce((sum: number, s) => sum + ((s.actualItems || s.items)[t] || 0), 0);
-                        const received = ticketA.receives[dest]?.reduce((sum: number, r: ReceiveOperation) => sum + (r.items[t] || 0), 0) || 0;
-                        return { sent, received };
+                      const rowData: { sent: number, received: number, isSub?: boolean, isWorkshop?: boolean }[] = [];
+                      destinations.forEach((dest, dIdx) => {
+                        if (dest === "Về A") {
+                          const sReg = ticketA.sends.filter(s => (s.workshopIdx === dIdx || s.workshop === dest) && s.delivered && !s.isHome);
+                          const sentReg = sReg.reduce((sum: number, s) => sum + ((s.actualItems || s.items)[t] || 0), 0);
+                          const recvReg = (ticketA.receives[dest] || []).filter(r => !ticketA.sends.find(s => s.id === r.forSendId)?.isHome).reduce((sum: number, r) => sum + (r.items[t] || 0), 0);
+                          rowData.push({ sent: sentReg, received: recvReg });
+                          
+                          const sHome = ticketA.sends.filter(s => (s.workshopIdx === dIdx || s.workshop === dest) && s.delivered && s.isHome);
+                          const sentHome = sHome.reduce((sum: number, s) => sum + ((s.actualItems || s.items)[t] || 0), 0);
+                          const recvHome = (ticketA.receives[dest] || []).filter(r => ticketA.sends.find(s => s.id === r.forSendId)?.isHome).reduce((sum: number, r) => sum + (r.items[t] || 0), 0);
+                          rowData.push({ sent: sentHome, received: recvHome, isSub: true });
+                        } else {
+                          const sends = ticketA.sends.filter(s => (s.workshopIdx === dIdx || s.workshop === dest) && s.delivered);
+                          const sent = sends.reduce((sum: number, s) => sum + ((s.actualItems || s.items)[t] || 0), 0);
+                          const received = ticketA.receives[dest]?.reduce((sum: number, r: ReceiveOperation) => sum + (r.items[t] || 0), 0) || 0;
+                          rowData.push({ sent, received, isWorkshop: true });
+                        }
                       });
-                      const totalSent = rowData.reduce((a, b) => a + b.sent, 0);
-                      const totalReceived = rowData.reduce((a, b) => a + b.received, 0);
+                      
+                      const totalSent = rowData.filter(v => v.isWorkshop).reduce((a, b) => a + b.sent, 0);
+                      const totalReceived = rowData.filter(v => v.isWorkshop).reduce((a, b) => a + b.received, 0);
                       
                       return (
                         <tr key={t} className="border-b dark:border-slate-800 last:border-0 hover:bg-gray-50 dark:hover:bg-slate-800/30 transition-colors">
                           <td className="p-3 font-bold text-gray-700 dark:text-slate-200">{t}</td>
                           {rowData.map((v, i) => (
-                            <td key={i} className="p-3 text-center">
-                              {!showReceivedProgress ? (
-                                <span className="text-gray-600 dark:text-slate-400">{v.sent || 0}</span>
-                              ) : (
-                                <div className="flex flex-col items-center">
-                                  <span className="text-gray-900 dark:text-white font-bold">{v.sent || 0}</span>
-                                  <div className="w-full h-[1px] bg-gray-200 dark:bg-slate-700 my-0.5" />
-                                  <span className={cn(
-                                    "font-bold",
-                                    v.received >= v.sent && v.sent > 0 ? "text-green-600 dark:text-green-400" : 
-                                    v.received > 0 ? "text-amber-600 dark:text-amber-400" : "text-gray-400"
-                                  )}>
-                                    {v.received || 0}
-                                  </span>
-                                </div>
+                            <React.Fragment key={i}>
+                              {v.isSub && (
+                                <td className="w-0 p-0 text-center align-middle">
+                                  <div className="h-4 w-[1px] bg-gray-100 dark:bg-slate-800 mx-auto" />
+                                </td>
                               )}
-                            </td>
+                              <td className={cn(
+                                "p-3 text-center",
+                                v.isWorkshop && "bg-amber-50/20 dark:bg-amber-900/5"
+                              )}>
+                                {!showReceivedProgress ? (
+                                  <span className="text-gray-600 dark:text-slate-400">{v.sent || 0}</span>
+                                ) : (
+                                  <div className="flex flex-col items-center">
+                                    <span className="text-gray-900 dark:text-white font-bold">{v.sent || 0}</span>
+                                    <div className="w-full h-[1px] bg-gray-200 dark:bg-slate-700 my-0.5" />
+                                    <span className={cn(
+                                      "font-bold",
+                                      v.received >= v.sent && v.sent > 0 ? "text-green-600 dark:text-green-400" : 
+                                      v.received > 0 ? "text-amber-600 dark:text-amber-400" : "text-gray-400"
+                                    )}>
+                                      {v.received || 0}
+                                    </span>
+                                  </div>
+                                )}
+                              </td>
+                            </React.Fragment>
                           ))}
-                          <td className="p-3 text-center font-bold bg-blue-50/30 dark:bg-blue-900/20">
+                          <td className="p-3 text-center font-bold bg-blue-50/30 dark:bg-blue-900/20 border-l dark:border-slate-800">
                             {!showReceivedProgress ? (
                               <span className="text-blue-600 dark:text-blue-400">{totalSent}</span>
                             ) : (
                               <div className="flex flex-col items-center">
-                                <span className="text-blue-700 dark:text-blue-300">{totalSent}</span>
-                                <div className="w-full h-[1px] bg-blue-200 dark:bg-blue-800 my-0.5" />
                                 <span className={cn(
                                   totalReceived >= totalSent && totalSent > 0 ? "text-green-600 dark:text-green-400" : "text-blue-600 dark:text-blue-400"
                                 )}>
@@ -1234,27 +1533,63 @@ export default function App() {
                       <td className="p-3 dark:text-white">TỔNG</td>
                       {destinations.map((dest, dIdx) => {
                         const sends = ticketA.sends.filter(s => (s.workshopIdx === dIdx || s.workshop === dest) && s.delivered);
-                        const sent = sends.reduce((sum: number, s) => sum + sumValues(s.actualItems || s.items), 0);
-                        const received = ticketA.receives[dest]?.reduce((sum: number, r: ReceiveOperation) => sum + sumValues(r.items), 0) || 0;
+                        const sReg = sends.filter(s => !s.isHome);
+                        const sHome = sends.filter(s => s.isHome);
+                        
+                        const sentReg = sReg.reduce((sum: number, s) => sum + sumValues(s.actualItems || s.items), 0);
+                        const sentHome = sHome.reduce((sum: number, s) => sum + sumValues(s.actualItems || s.items), 0);
+                        
+                        const rAll = ticketA.receives[dest] || [];
+                        const rReg = rAll.filter(r => !ticketA.sends.find(s => s.id === r.forSendId)?.isHome);
+                        const rHome = rAll.filter(r => ticketA.sends.find(s => s.id === r.forSendId)?.isHome);
+                        
+                        const recvReg = rReg.reduce((sum: number, r) => sum + sumValues(r.items), 0);
+                        const recvHome = rHome.reduce((sum: number, r) => sum + sumValues(r.items), 0);
                         
                         return (
-                          <td key={dest} className="p-3 text-center dark:text-white">
-                            {!showReceivedProgress ? (
-                              sent
+                          <React.Fragment key={dest}>
+                            {dest === "Về A" ? (
+                              <>
+                                <td className="p-3 text-center dark:text-white">
+                                  {!showReceivedProgress ? sentReg : (
+                                    <div className="flex flex-col items-center">
+                                      <span>{sentReg}</span>
+                                      <div className="w-full h-[1px] bg-gray-300 dark:bg-slate-600 my-0.5" />
+                                      <span className={sentReg > 0 && recvReg >= sentReg ? "text-green-600 dark:text-green-400" : ""}>{recvReg}</span>
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="p-0 align-middle">
+                                  <div className="h-4 w-[1px] bg-gray-200 dark:bg-slate-700 mx-auto" />
+                                </td>
+                                <td className="p-3 text-center dark:text-white">
+                                  {!showReceivedProgress ? sentHome : (
+                                    <div className="flex flex-col items-center">
+                                      <span>{sentHome}</span>
+                                      <div className="w-full h-[1px] bg-gray-300 dark:bg-slate-600 my-0.5" />
+                                      <span className={sentHome > 0 && recvHome >= sentHome ? "text-green-600 dark:text-green-400" : ""}>{recvHome}</span>
+                                    </div>
+                                  )}
+                                </td>
+                              </>
                             ) : (
-                              <div className="flex flex-col items-center">
-                                <span>{sent}</span>
-                                <div className="w-full h-[1px] bg-gray-300 dark:bg-slate-600 my-0.5" />
-                                <span className={sent > 0 && received >= sent ? "text-green-600 dark:text-green-400" : ""}>{received}</span>
-                              </div>
+                              <td className="p-3 text-center dark:text-white bg-amber-50/30 dark:bg-amber-900/10">
+                                {!showReceivedProgress ? sentReg : (
+                                  <div className="flex flex-col items-center">
+                                    <span>{sentReg}</span>
+                                    <div className="w-full h-[1px] bg-gray-300 dark:bg-slate-600 my-0.5" />
+                                    <span className={sentReg > 0 && recvReg >= sentReg ? "text-green-600 dark:text-green-400" : ""}>{recvReg}</span>
+                                  </div>
+                                )}
+                              </td>
                             )}
-                          </td>
+                          </React.Fragment>
                         );
                       })}
-                      <td className="p-3 text-center bg-blue-100/50 dark:bg-blue-900/40">
+                      <td className="p-3 text-center bg-blue-100/50 dark:bg-blue-900/40 border-l dark:border-slate-800">
                         {(() => {
-                          const totalSent = ticketA.sends.filter(s => s.delivered).reduce((sum: number, s) => sum + sumValues(s.actualItems || s.items), 0);
-                          const totalReceived = Object.values(ticketA.receives).flat().reduce((sum: number, r: any) => sum + sumValues(r.items), 0);
+                          const totalSent = ticketA.sends.filter(s => s.delivered && !s.isHome && s.workshop !== "Về A").reduce((sum: number, s) => sum + sumValues(s.actualItems || s.items), 0);
+                          const totalReceived = Object.entries(ticketA.receives).filter(([ws]) => ws !== "Về A").flatMap(([, items]) => items).reduce((sum: number, r: any) => sum + sumValues(r.items), 0);
                           
                           return !showReceivedProgress ? (
                             <span className="text-blue-700 dark:text-blue-300">{totalSent}</span>
@@ -1316,16 +1651,25 @@ export default function App() {
               </div>
             )}
 
-            {/* Add Send Form Toggle */}
-            {!showAddSend ? (
-              <button 
-                onClick={() => setShowAddSend(true)}
-                className="w-full py-4 border-2 border-dashed border-gray-300 dark:border-slate-800 rounded-2xl flex flex-col items-center justify-center gap-2 text-gray-500 dark:text-slate-400 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-all"
-              >
-                <Plus className="w-6 h-6" />
-                <span className="text-sm font-bold">Thêm lượt gửi từ A</span>
-              </button>
-            ) : (
+            {/* Add Send Form / Home May Toggle Buttons */}
+            {!showAddSend && !showHomeMay ? (
+              <div className="flex gap-4">
+                <button 
+                  onClick={() => setShowAddSend(true)}
+                  className="flex-1 py-4 border-2 border-dashed border-gray-300 dark:border-slate-800 rounded-2xl flex flex-col items-center justify-center gap-2 text-gray-500 dark:text-slate-400 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-all"
+                >
+                  <Plus className="w-6 h-6" />
+                  <span className="text-sm font-bold">Thêm lượt gửi từ A</span>
+                </button>
+                <button 
+                  onClick={() => setShowHomeMay(true)}
+                  className="flex-1 py-4 border-2 border-dashed border-amber-300 dark:border-amber-900/30 rounded-2xl flex flex-col items-center justify-center gap-2 text-amber-600 dark:text-amber-400 hover:border-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/10 transition-all"
+                >
+                  <Home className="w-6 h-6" />
+                  <span className="text-sm font-bold">May ở nhà</span>
+                </button>
+              </div>
+            ) : showAddSend ? (
               <div className="bg-gray-50 dark:bg-slate-900 rounded-2xl border dark:border-slate-800 p-4 space-y-4 animate-in zoom-in-95 duration-200">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-gray-800">Tạo lượt gửi mới</h3>
@@ -1378,6 +1722,46 @@ export default function App() {
                     className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 hover:bg-blue-700"
                   >
                     Gửi đi
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-amber-50/50 dark:bg-amber-900/10 rounded-2xl border border-amber-100 dark:border-amber-900/30 p-4 space-y-4 animate-in zoom-in-95 duration-200">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-amber-800 dark:text-amber-300">Ghi nhận may ở nhà (Chỉ Bo & Ôm)</h3>
+                  <button onClick={() => setShowHomeMay(false)} className="text-amber-400 hover:text-amber-600">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  {["Bo chun", "Ôm"].map(t => (
+                    <div key={t} className="space-y-2">
+                      <label className="text-xs font-bold text-amber-700 dark:text-amber-400 ml-1">{t}</label>
+                      <input 
+                        type="number" 
+                        placeholder="0"
+                        value={homeMayItems[t] || ""}
+                        onChange={(e) => {
+                          const v = parseInt(e.target.value) || 0;
+                          setHomeMayItems({ ...homeMayItems, [t]: v });
+                        }}
+                        className="w-full bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-lg py-2 text-center font-bold text-amber-700 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => setShowHomeMay(false)}
+                    className="flex-1 py-3 bg-white dark:bg-slate-800 border dark:border-slate-700 text-gray-600 dark:text-slate-400 font-bold rounded-xl hover:bg-gray-50"
+                  >
+                    Huỷ
+                  </button>
+                  <button 
+                    onClick={submitHomeMay}
+                    className="flex-1 py-3 bg-amber-600 text-white font-bold rounded-xl shadow-lg shadow-amber-200 hover:bg-amber-700"
+                  >
+                    Xác nhận
                   </button>
                 </div>
               </div>
@@ -1461,12 +1845,13 @@ export default function App() {
                                     {send.source === 'B' && (
                                       <span className="px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 text-[9px] font-bold rounded">Từ B</span>
                                     )}
-                                    {isDone && <Check className="w-3 h-3 text-green-500" />}
-                                    {status.status === "partial" && (
-                                      <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400">
-                                        {status.recvTotal}/{status.sentTotal}
-                                      </span>
-                                    )}
+                                    {isDone ? (
+                                      <span className="px-1.5 py-0.5 bg-green-100 text-green-700 text-[9px] font-black rounded uppercase">Hoàn tất</span>
+                                    ) : (status.recvTotal > 0 ? (
+                                      <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 text-[9px] font-black rounded uppercase">Lấy {status.recvTotal}/{status.sentTotal}</span>
+                                    ) : (
+                                      <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[9px] font-black rounded uppercase">Chờ lấy</span>
+                                    ))}
                                   </div>
                                   <div className="mt-1.5 w-full max-w-[120px]">
                                     <div className="h-1.5 w-full bg-gray-100 dark:bg-slate-800 rounded-full overflow-hidden">
@@ -1486,12 +1871,21 @@ export default function App() {
                                 <div className="flex gap-1.5">
                                   <button 
                                     onClick={() => {
-                                      const itemsText = Object.entries(send.actualItems || send.items).map(([k, v]) => `${k}: ${v}`).join("\n");
-                                      const text = `Xưởng ${send.workshop} ơi,\nKho Otama vừa giao hàng:\n${itemsText}\nLần: ${send.batch}\nLúc: ${send.deliveredAt}\nCheck giúp em nhé!`;
-                                      shareToZalo(text);
+                                      // Gửi tín hiệu sang n8n/Zalo thủ công để chốt sổ ngày
+                                      const webhookId = `MANUAL-${send.workshop}-${send.batch}-${currentDate}`.replace(/\s+/g, '-');
+                                      const payload = getWebhookPayload(send);
+                                      triggerWebhook('CHỐT SỔ NGÀY', {
+                                        id: webhookId,
+                                        action: "📊 BÁO CÁO TIẾN ĐỘ NGÀY",
+                                        status: "Tổng hợp",
+                                        ...payload,
+                                        date: currentDate,
+                                        user: userProfile?.displayName || userProfile?.name || "Bạn"
+                                      });
+                                      showToast("Đã báo cáo tiến độ cho xưởng!");
                                     }}
-                                    className="p-2 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg hover:bg-blue-600 hover:text-white transition-all"
-                                    title="Gửi Zalo cho xưởng"
+                                    className="p-2 bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded-lg hover:bg-purple-600 hover:text-white transition-all"
+                                    title="Gửi báo cáo chốt sổ"
                                   >
                                     <MessageSquare className="w-4 h-4" />
                                   </button>
@@ -1554,11 +1948,25 @@ export default function App() {
                                             const nr: ReceiveOperation = {
                                               id: (ticketA.receives[send.workshop]?.length || 0) + 1,
                                               time: new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }),
-                                              by: "Bạn",
+                                              by: userProfile?.displayName || userProfile?.name || "Bạn",
                                               items,
                                               errors: {},
                                               forSendId: send.id
                                             };
+
+                                            // Tự động bắn Zalo khi nhận đủ hàng
+                                            const webhookId = `RECV-FULL-${send.workshop}-${send.batch}-${currentDate}`.replace(/\s+/g, '-');
+                                            const payload = getWebhookPayload(send, items, true);
+                                            
+                                            triggerWebhook('AUTO_RECEIVE_NOTIFY', {
+                                              id: webhookId,
+                                              action: "XÁC NHẬN NHẬN HÀNG",
+                                              status: "Đã nhận đủ",
+                                              ...payload,
+                                              date: currentDate,
+                                              user: nr.by
+                                            });
+
                                             updateData(prev => ({
                                               ticketsA: {
                                                 ...prev.ticketsA,
@@ -1571,11 +1979,7 @@ export default function App() {
                                                 }
                                               }
                                             }));
-                                            triggerWebhook('FULL_RECEIVE', {
-                                              workshop: send.workshop,
-                                              batch: send.batch,
-                                              items: items
-                                            });
+                                            
                                             sendGlobalNotification(
                                               "Nhận hàng",
                                               `${userProfile?.name || 'Nhân viên'} đã nhận đủ hàng từ xưởng ${send.workshop}`
@@ -1682,16 +2086,32 @@ export default function App() {
                         Khi Giao/Nhận hàng, App sẽ gửi dữ liệu sang n8n qua link này. Bạn có thể dùng n8n để bắn tin tiếp sang Zalo hoặc Telegram.
                       </p>
                     </div>
-                    <button 
-                      onClick={() => {
-                        triggerWebhook("TEST", { message: "Kiểm tra kết nối Webhook từ Otama Warehouse" });
-                        showToast("Đã gửi tín hiệu TEST sang n8n!");
-                      }}
-                      className="w-full py-2.5 bg-green-600 text-white text-xs font-bold rounded-xl shadow-md flex items-center justify-center gap-2 hover:bg-green-700 transition-all font-mono"
-                    >
-                      <Send className="w-3 h-3" />
-                      TEST KẾT NỐI N8N
-                    </button>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button 
+                        onClick={() => {
+                          triggerWebhook("TEST", { message: "Kiểm tra kết nối Webhook từ Otama Warehouse" });
+                          showToast("Đã gửi tín hiệu TEST sang n8n!");
+                        }}
+                        className="py-2.5 bg-green-600 text-white text-xs font-bold rounded-xl shadow-md flex items-center justify-center gap-2 hover:bg-green-700 transition-all font-mono"
+                      >
+                        <Send className="w-3 h-3" />
+                        TEST KẾT NỐI
+                      </button>
+                      <button 
+                        onClick={async () => {
+                          try {
+                            await setDoc(doc(db, 'settings', 'global'), settings);
+                            showToast("Đã lưu Webhook vĩnh viễn!");
+                          } catch (err) {
+                            showToast("Lỗi khi lưu!");
+                          }
+                        }}
+                        className="py-2.5 bg-blue-600 text-white text-xs font-bold rounded-xl shadow-md flex items-center justify-center gap-2 hover:bg-blue-700 transition-all"
+                      >
+                        <Check className="w-3 h-3" />
+                        LƯU WEBHOOK
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -2187,6 +2607,16 @@ export default function App() {
                                           
                                           const uploadResult = await uploadBytes(storageRef, compressedBlob);
                                           const photoUrl = await getDownloadURL(uploadResult.ref);
+                                          
+                                          // Thông báo cho n8n để tự động sao lưu sang Google Drive
+                                          triggerWebhook('PHOTO_UPLOAD', {
+                                            url: photoUrl,
+                                            sku: item.sku,
+                                            name: item.name,
+                                            batch: item.batch,
+                                            path: storageRef.fullPath
+                                          });
+                                          
                                           // --- End Logic ---
                                           
                                           updateData(prev => ({
@@ -2215,7 +2645,13 @@ export default function App() {
                                   </label>
                                   {item.photoUrl && (
                                     <button 
-                                      onClick={() => setModal({ type: 'previewImage', url: item.photoUrl, name: item.name })}
+                                      onClick={() => setModal({ 
+                                        type: 'previewImage', 
+                                        url: item.photoUrl, 
+                                        name: item.name,
+                                        requested: item.requested,
+                                        actual: item.actual
+                                      })}
                                       className="text-[9px] text-blue-600 font-bold hover:underline"
                                     >
                                       Xem ảnh
@@ -2890,11 +3326,25 @@ export default function App() {
                 const nr: ReceiveOperation = {
                   id: (ticketA.receives[receivingPartialSend.workshop]?.length || 0) + 1,
                   time: new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }),
-                  by: "Bạn",
+                  by: userProfile?.displayName || userProfile?.name || "Bạn",
                   items: finalItems,
                   errors: finalErrors,
                   forSendId: receivingPartialSend.id
                 };
+
+                // Tự động bắn Zalo khi nhận hàng một phần
+                const webhookId = `RECV-${receivingPartialSend.workshop}-${receivingPartialSend.batch}-${currentDate}-P${nr.id}`.replace(/\s+/g, '-');
+                const payload = getWebhookPayload(receivingPartialSend, finalItems);
+                
+                triggerWebhook('AUTO_RECEIVE_NOTIFY', {
+                  id: webhookId,
+                  action: "XÁC NHẬN NHẬN HÀNG",
+                  status: payload.daily_remaining === 0 ? "Đã nhận đủ" : "Nhận một phần",
+                  ...payload,
+                  date: currentDate,
+                  user: nr.by
+                });
+
                 updateData(prev => ({
                   ticketsA: {
                     ...prev.ticketsA,
@@ -2907,12 +3357,7 @@ export default function App() {
                     }
                   }
                 }));
-                triggerWebhook('PARTIAL_RECEIVE', {
-                  workshop: receivingPartialSend.workshop,
-                  batch: receivingPartialSend.batch,
-                  items: finalItems,
-                  errors: finalErrors
-                });
+                
                 sendGlobalNotification(
                   "Cập nhật hàng",
                   `${userProfile?.name || 'Nhân viên'} vừa cập nhật nhận ${sumValues(finalItems)} hàng từ ${receivingPartialSend.workshop}`
@@ -3084,21 +3529,37 @@ export default function App() {
                 }
                 
                 const at = new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
-                updateData(prev => {
-                  const newSends = ticketA.sends.map(s => s.id === deliveringSend.id ? {
-                    ...s,
+
+                // Construct temp ticketA for webhook calculation before update
+                const updatedSendItem = {
+                    ...deliveringSend,
                     delivered: true,
                     actualItems: { ...deliveryActual },
                     deliveryNote: deliveryNote,
-                    deliveredBy: "Bạn",
+                    deliveredBy: userProfile?.displayName || userProfile?.name || "Bạn",
                     deliveredAt: at
-                  } : s);
+                };
+                const newSendsForWebhook = ticketA.sends.map(s => s.id === deliveringSend.id ? updatedSendItem : s);
+                const tempTicketA = { ...ticketA, sends: newSendsForWebhook };
 
+                const payload = getWebhookPayload(updatedSendItem, null, false, tempTicketA);
+                const webhookId = `SEND-${updatedSendItem.workshop}-${updatedSendItem.batch}-${currentDate}`.replace(/\s+/g, '-');
+                triggerWebhook('BÀN GIAO HÀNG', {
+                  id: webhookId,
+                  action: "🚚 BÀN GIAO HÀNG CHO XƯỞNG",
+                  status: "Vừa giao hàng",
+                  ...payload,
+                  received_now_text: `📤 Vừa giao: ${sumValues(deliveryActual)} cái`,
+                  date: currentDate,
+                  user: updatedSendItem.deliveredBy
+                });
+
+                updateData(prev => {
                   let nextData = {
                     ...prev,
                     ticketsA: {
                       ...prev.ticketsA,
-                      [currentDate]: { ...ticketA, sends: newSends }
+                      [currentDate]: tempTicketA
                     }
                   };
 
@@ -3130,12 +3591,7 @@ export default function App() {
 
                   return nextData;
                 });
-                triggerWebhook('DELIVERY', {
-                  workshop: deliveringSend.workshop,
-                  batch: deliveringSend.batch,
-                  items: deliveryActual,
-                  note: deliveryNote
-                });
+                
                 sendGlobalNotification(
                   "Giao hàng mới", 
                   `${userProfile?.name || 'Quản lý'} vừa giao ${sumValues(deliveryActual)} hàng cho xưởng ${deliveringSend.workshop}`
@@ -3309,17 +3765,32 @@ export default function App() {
 
                   if (targetSend) {
                     const totalQty = deliveryConfirmItems.reduce((s, i) => s + i.qty, 0);
-                    const newSendsA = currentTicketA.sends.map(s => s.id === targetSend.id ? {
-                      ...s,
+                    const updatedSendItem = {
+                      ...targetSend,
                       delivered: true,
                       deliveredAt: at,
-                      deliveredBy: "Bạn",
+                      deliveredBy: userProfile?.displayName || userProfile?.name || "Bạn",
                       workshop: dest,
                       workshopIdx: dIdx,
                       items: aggregateByCategory(deliveryConfirmItems),
                       bSourceItems: deliveryConfirmItems.map(i => ({ sku: i.sku, name: i.name, qty: i.qty }))
-                    } : s);
-                    nextData.ticketsA[currentDate] = { ...currentTicketA, sends: newSendsA };
+                    };
+                    const newSendsA = currentTicketA.sends.map(s => s.id === targetSend.id ? updatedSendItem : s);
+                    
+                    const tempTicketA = { ...currentTicketA, sends: newSendsA };
+                    nextData.ticketsA[currentDate] = tempTicketA;
+
+                    const payload = getWebhookPayload(updatedSendItem, null, false, tempTicketA);
+                    const webhookId = `SEND-B-${updatedSendItem.workshop}-${updatedSendItem.batch}-${currentDate}`.replace(/\s+/g, '-');
+                    triggerWebhook('BÀN GIAO HÀNG', {
+                      id: webhookId,
+                      action: "🚚 BÀN GIAO HÀNG CHO XƯỞNG",
+                      status: "Vừa giao hàng",
+                      ...payload,
+                      received_now_text: `📤 Vừa giao: ${totalQty} cái`,
+                      date: currentDate,
+                      user: updatedSendItem.deliveredBy
+                    });
                   }
 
                   return nextData;
@@ -3453,14 +3924,6 @@ export default function App() {
                     }
                   }
                   return nextData;
-                });
-                triggerWebhook('ITEM_CHECK', {
-                  sku: item.sku,
-                  name: item.name,
-                  requested: item.requested,
-                  actual: editActual,
-                  note: editNote,
-                  batch: item.batch
                 });
                 setModal(null);
                 showToast("Đã cập nhật số thực tế");
@@ -3792,6 +4255,28 @@ export default function App() {
         maxWidth="max-w-2xl"
       >
         <div className="flex flex-col items-center gap-4 py-2">
+          {modal?.requested !== undefined && (
+            <div className="w-full flex items-center justify-center gap-4 py-2 bg-gray-50 rounded-xl border border-gray-100">
+              <div className="flex flex-col items-center">
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-tight">Yêu cầu</span>
+                <span className="text-xl font-black text-gray-900 leading-none">{modal.requested}</span>
+              </div>
+              {modal.actual !== null && (
+                <>
+                  <div className="h-8 w-px bg-gray-200" />
+                  <div className="flex flex-col items-center">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-tight">Thực tế</span>
+                    <span className={cn(
+                      "text-xl font-black leading-none",
+                      modal.actual === modal.requested ? "text-green-600" : "text-amber-600"
+                    )}>
+                      {modal.actual}
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           <div className="relative w-full aspect-square md:aspect-video bg-gray-100 rounded-xl overflow-hidden shadow-inner flex items-center justify-center">
             {modal?.url ? (
               <img 

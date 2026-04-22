@@ -9,7 +9,7 @@ export const emptyTicketA = (date: string): TicketA => ({
   creator: "Quản lý Lan",
   status: "Mới tạo",
   sends: [],
-  receives: { "A Triều": [], "Bích": [], "Thảo": [] },
+  receives: { "Về A": [], "A Triều": [], "Bích": [], "Thảo": [] },
 });
 
 export const emptyTicketB = (date: string): TicketB => ({

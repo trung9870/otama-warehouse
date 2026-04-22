@@ -19,6 +19,7 @@ export interface SendOperation {
   bSourceItems?: { sku: string; name: string; qty: number }[];
   sourceBatch?: number;
   workshopIdx?: number;
+  isHome?: boolean;
 }
 
 export interface ReceiveOperation {
