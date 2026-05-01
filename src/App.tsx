@@ -840,17 +840,34 @@ export default function App() {
         };
     });
     
+    // Tự động bắn Zalo
+    const tempTicketA = { 
+      ...ticketA, 
+      sends: [...ticketA.sends, newSend], 
+      receives: { ...ticketA.receives, ["Về A"]: [...(ticketA.receives["Về A"] || []), newReceive] }
+    };
+    const payload = getWebhookPayload(newSend, null, false, tempTicketA);
+    const webhookId = `SEND-HOME-${newSend.workshop}-${newSend.batch}-${currentDate}`.replace(/\s+/g, '-');
+    triggerWebhook('MAY_Ở_NHÀ', {
+      id: webhookId,
+      action: "🏠 GHI NHẬN MAY Ở NHÀ",
+      status: "Vừa may xong",
+      ...payload
+    });
+
     setShowHomeMay(false);
     setHomeMayItems({});
     showToast(`Đã ghi nhận may ở nhà: ${sumValues(items)} chiếc`);
   };
 
   // --- Phiếu B Logic ---
-  const [productForm, setProductForm] = useState<{ mode: 'add' | 'edit', batch?: number, sku?: string } | null>(null);
+  const [productForm, setProductForm] = useState<{ mode: 'add' | 'edit', batch?: number, sku?: string, isNvAdd?: boolean, id?: string } | null>(null);
   const [formProductSku, setFormProductSku] = useState("");
   const [formProductAlloc, setFormProductAlloc] = useState<number[]>(new Array(destinations.length).fill(0));
+  const [formRequestedTypes, setFormRequestedTypes] = useState<string[]>([]);
   const [productSearch, setProductSearch] = useState("");
-  const [editingItem, setEditingItem] = useState<string | null>(null);
+  const [newCatalogProduct, setNewCatalogProduct] = useState<{sku: string, name: string, category: string}>({sku: '', name: '', category: 'Vỏ chăn'});
+  const [editingItem, setEditingItem] = useState<{sku: string, batch: number, id?: string} | null>(null);
   const [editingSendWorkshop, setEditingSendWorkshop] = useState<SendOperation | null>(null);
   const [editActual, setEditActual] = useState(0);
   const [editNote, setEditNote] = useState("");
@@ -860,6 +877,7 @@ export default function App() {
   const [editingRealloc, setEditingRealloc] = useState<Record<string, number[]>>({});
   const [collapsedBatches, setCollapsedBatches] = useState<Record<string, boolean>>({});
   const [collapsedBatchesA, setCollapsedBatchesA] = useState<Record<string, boolean>>({});
+  const [cancelSplitBatch, setCancelSplitBatch] = useState<number | null>(null);
 
   // --- Render Helpers ---
   const getSentTotal = (tA: TicketA, ws: string) => {
@@ -961,22 +979,22 @@ export default function App() {
       return 5;
     };
 
+    const shortName = (name: string) => {
+      const n = name.toLowerCase();
+      if (n.includes('bo')) return 'Bo';
+      // User requested "Chăn trần" to become "Lót"
+      if (n.includes('chăn trần') || n.includes('chăn') || n.includes('lót')) return 'Lót';
+      if (n.includes('ôm')) return 'Ôm';
+      if (n.includes('ga trần')) return 'GaTr';
+      return name.substring(0, 4);
+    };
+
     const activeItems = Object.entries(batchSentItems)
       .filter(([_, v]) => (v as number) > 0)
       .sort(([a], [b]) => getOrderIdx(a) - getOrderIdx(b));
     
     let itemDetails = "";
     if (activeItems.length > 0) {
-      const shortName = (name: string) => {
-        const n = name.toLowerCase();
-        if (n.includes('bo')) return 'Bo';
-        if (n.includes('chăn')) return 'Chăn';
-        if (n.includes('lót')) return 'Lót';
-        if (n.includes('ôm')) return 'Ôm';
-        if (n.includes('ga trần')) return 'GaTr';
-        return name.substring(0, 4);
-      };
-
       // Dùng Figure Space (\u2007) để đệm số, vì nó có độ rộng vật lý chính xác bằng 1 con số
       const padNum = (num: number, maxDigits: number) => {
         const s = String(num);
@@ -1066,17 +1084,80 @@ export default function App() {
     
     const receivedNowText = isUndo ? `🔄 Vừa hoàn tác: ${sumValues(justReceivedItems || {})} cái (đã trừ khỏi tổng)` : justReceivedItems ? `📥 Vừa nhận thêm: +${sumValues(justReceivedItems)} cái` : "";
 
+    // Generate Zalo Message Formatted precisely as requested
+    let formattedMessage = `🏭 XƯỞNG: ${send.workshop} (Lần ${send.batch})\n`;
+    formattedMessage += `⚡ Thao tác: ${actionStatus}\n`;
+
+    if (justReceivedItems && Object.keys(justReceivedItems).length > 0) {
+      const receivedItemsStr = Object.entries(justReceivedItems)
+        .filter(([_, v]) => v !== 0) // Include negative for undo
+        .map(([k, v]) => `${shortName(k)}: ${Math.abs(v)}${v < 0 ? ' (Hoàn tác)' : ''}`)
+        .join(", ");
+      if (receivedItemsStr) {
+        formattedMessage += `📦 Vừa ${isUndo ? 'đính chính' : 'lấy'}: ${receivedItemsStr}\n`;
+      }
+    }
+
+    formattedMessage += `\n📈 CHI TIẾT LÔ ${send.batch}: (Lấy / Tổng)\n`;
+    
+    let details_str = "";
+    activeItems.forEach(([k, totalStr]) => {
+      const total = totalStr as number;
+      let previousRecv = 0;
+      (tA.receives[send.workshop] || []).filter(r => r.forSendId === send.id).forEach(r => {
+        previousRecv += (r.items[k] || 0) + (r.errors?.[k] || 0);
+      });
+      let cumulativeVal = previousRecv;
+      if (isFull) {
+        cumulativeVal = total;
+      } else if (justReceivedItems && justReceivedItems[k]) {
+        cumulativeVal = previousRecv + justReceivedItems[k];
+      }
+      const rem = Math.max(0, total - cumulativeVal);
+
+      // Pad the name to align correctly (adjust to 8 chars approx)
+      let paddedName = shortName(k);
+      while (paddedName.length < 8) paddedName += " ";
+
+      const line = `▪️ ${paddedName} : ${cumulativeVal} / ${total} (Còn ${rem})\n`;
+      formattedMessage += line;
+      details_str += line;
+    });
+    
+    details_str = details_str.trimEnd();
+
+    formattedMessage += `---\n`;
+    formattedMessage += `Tổng tiến độ lô này: ${currentRecvTotal} / ${status.sentTotal}`;
+
+    const finalItemsToReturn = justReceivedItems || batchSentItems;
+    
+    let just_received_str = "";
+    if (justReceivedItems && Object.keys(justReceivedItems).length > 0) {
+      just_received_str = Object.entries(justReceivedItems)
+        .filter(([_, v]) => v !== 0) // Include negative for undo
+        .map(([k, v]) => `${shortName(k)}: ${Math.abs(v)}${v < 0 ? ' (Hoàn tác)' : ''}`)
+        .join(", ");
+    }
+
     return {
       status: actionStatus,
       workshop: send.workshop,
+      batch: send.batch,
       batch_info: `Lần ${send.batch} (Giao ${send.deliveredAt || send.time}): Lấy ${currentRecvTotal}/${status.sentTotal} (Còn: ${Math.max(0, status.sentTotal - currentRecvTotal)})`,
       item_details: itemDetails,
+      details_str: details_str,
+      just_received_str: just_received_str,
+      zaloMessage: formattedMessage,
       daily_sent: dailySent,
       daily_received: isFull ? daily.dailyReceived + sumValues(justReceivedItems || {}) : dailyReceived,
       daily_remaining: isFull ? dailySent - (daily.dailyReceived + sumValues(justReceivedItems || {})) : dailySent - dailyReceived,
       received_now: justReceivedItems ? sumValues(justReceivedItems) : 0,
       received_now_text: receivedNowText,
-      items: justReceivedItems || batchSentItems 
+      items: finalItemsToReturn,
+      ...(finalItemsToReturn as Record<string, number>),
+      "Tổng giao": status.sentTotal,
+      "Tổng lấy": currentRecvTotal,
+      "Còn lại": Math.max(0, status.sentTotal - currentRecvTotal)
     };
   };
 
@@ -2344,97 +2425,161 @@ export default function App() {
 
               return batchKeys.map(bk => {
                 const bItems = batches[parseInt(bk)];
+                const isCollapsed = collapsedBatches[bk];
+                const photoDone = bItems.filter(i => i.photoTaken).length;
+                const actualDone = bItems.filter(i => i.actual !== null).length;
+                const allDone = bItems.length > 0 && photoDone === bItems.length && actualDone === bItems.length;
+                
                 return (
-                  <div key={bk} className="bg-white rounded-2xl border shadow-sm overflow-hidden">
-                    <div className="bg-gray-50 px-4 py-3 border-b flex items-center justify-between">
+                  <div key={bk} className={cn("rounded-2xl border shadow-sm overflow-hidden", bItems.some(i => i.isNvAdd) ? "bg-amber-50/50 border-amber-200" : "bg-white")}>
+                    <div 
+                      onClick={() => setCollapsedBatches(prev => ({ ...prev, [bk]: !prev[bk] }))}
+                      className={cn("px-4 py-3 border-b flex items-center justify-between cursor-pointer", bItems.some(i => i.isNvAdd) ? "bg-amber-100/50 border-amber-200" : "bg-gray-50")}
+                    >
                       <div className="flex items-center gap-2">
+                        <ChevronDown className={cn("w-4 h-4 text-gray-400 transition-transform", isCollapsed && "-rotate-90")} />
                         <h3 className="text-sm font-bold text-gray-800 tracking-tight">Lần {bk}</h3>
+                        {bItems.some(i => i.isNvAdd) && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700 uppercase">NV Thêm</span>
+                        )}
+                        {bItems.some(i => i.deliveries && Object.values(i.deliveries).some(d => d.delivered)) && (
+                          <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 text-[9px] font-bold rounded">Từ B</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold text-gray-400">
+                          {bItems.length} SP · {bItems.reduce((s, i) => s + i.requested, 0)} chiếc
+                        </span>
+                        
                         <button 
-                          onClick={() => {
-                            const summaryText = bItems.map(it => `- ${it.name}: ${it.requested}`).join("\n");
-                            const text = `DANH SÁCH LẤY HÀNG B - LẦN ${bk}\nNgày: ${ticketB.date}\n${summaryText}\nTổng: ${bItems.reduce((s, i) => s + i.requested, 0)} chiếc.`;
-                            shareToZalo(text);
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const summaryText = bItems.map(it => {
+                              const shortItemName = it.name.includes(" - ") ? it.name.split(" - ").pop()?.trim() || it.name : it.name;
+                              let txt = `- ${shortItemName}: ${it.requested}`;
+                              if (it.requestedTypes && it.requestedTypes.length > 0) {
+                                const mappedTypes = it.requestedTypes.map(t => {
+                                  if (t === 'Ko bo') return 'k bo';
+                                  if (t === 'm6') return '6';
+                                  if (t === 'm8') return '8';
+                                  return t;
+                                });
+                                txt += ` (${mappedTypes.join(', ')})`;
+                              }
+                              return txt;
+                            }).join("\n");
+                            const totalQty = bItems.reduce((s, i) => s + i.requested, 0);
+                            const text = `Bù hàng\n${summaryText}`;
+                            const webhookId = `REQ-B-${bk}-${currentDate}`.replace(/\s+/g, '-');
+                            triggerWebhook('YÊU_CẦU_LẤY_HÀNG_B', {
+                              id: webhookId,
+                              action: "📦 YÊU CẦU LẤY HÀNG CÒN THIẾU",
+                              status: "Yêu cầu",
+                              date: ticketB.date,
+                              batch: parseInt(bk),
+                              totalQty: totalQty,
+                              items: bItems.map(it => ({
+                                name: it.name,
+                                sku: it.sku,
+                                requested: it.requested,
+                                requestedTypes: it.requestedTypes || [],
+                                alloc: destinations.map((d, i) => it.allocation[i] > 0 ? `${d}: ${it.allocation[i]}` : null).filter(Boolean).join(', ')
+                              })),
+                              zaloMessage: text,
+                              user: userProfile?.displayName || userProfile?.name || "Quản lý"
+                            });
+                            showToast("Đã gửi yêu cầu lấy hàng vào nhóm Zalo (qua n8n)!");
                           }}
                           className="p-1 px-2.5 bg-blue-100 text-blue-600 rounded-full text-[9px] font-bold flex items-center gap-1 hover:bg-blue-600 hover:text-white transition-all"
                         >
                           <MessageSquare className="w-3 h-3" />
                           Gửi Zalo
                         </button>
+
+                        {allDone && (
+                          <span className="px-2 py-0.5 bg-green-100 text-green-700 text-[9px] font-bold rounded-full">Đã lấy</span>
+                        )}
                       </div>
-                      <span className="text-[10px] font-bold text-gray-400 bg-white px-2 py-0.5 rounded border">
-                        {bItems.length} SP · {bItems.reduce((s, i) => s + i.requested, 0)} chiếc
-                      </span>
                     </div>
-                    <div className="divide-y">
-                      {bItems.map(item => (
-                        <div key={item.sku} className="p-4 hover:bg-gray-50 transition-colors">
-                          <div className="flex justify-between items-start gap-4">
-                            <div className="flex-1 min-w-0">
-                              <h4 className="font-bold text-sm text-gray-900 leading-tight">{item.name}</h4>
-                              <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold tracking-wider">
-                                {item.category} · Tổng <span className="text-blue-600">{item.requested}</span>
-                              </p>
-                            </div>
-                            <div className="flex gap-1">
-                              <button 
-                                onClick={() => {
-                                  setProductForm({ mode: 'edit', sku: item.sku });
-                                  setFormProductSku(item.sku);
-                                  setFormProductAlloc([...item.allocation]);
-                                  setModal({ type: 'productForm' });
-                                }}
-                                className="p-1.5 bg-amber-50 text-amber-600 rounded-lg border border-amber-100"
-                              >
-                                <Edit3 className="w-3.5 h-3.5" />
-                              </button>
-                              <button 
-                                onClick={() => {
-                                  setModal({
-                                    type: 'confirm',
-                                    title: "Xoá sản phẩm?",
-                                    msg: `Bạn muốn xoá ${item.name} khỏi danh sách?`,
-                                    onOk: () => {
-                                      updateData(prev => ({
-                                        ticketsB: {
-                                          ...prev.ticketsB,
-                                          [currentDate]: {
-                                            ...ticketB,
-                                            items: ticketB.items.filter(i => i.sku !== item.sku)
-                                          }
+                    {!isCollapsed && (
+                      <>
+                        <div className="divide-y">
+                          {bItems.map(item => (
+                            <div key={item.sku} className="p-4 hover:bg-gray-50 transition-colors">
+                              <div className="flex justify-between items-start gap-4">
+                                <div className="flex-1 min-w-0">
+                                  <h4 className="font-bold text-sm text-gray-900 leading-tight">{item.name}</h4>
+                                  <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold tracking-wider">
+                                    {item.category} · Tổng <span className="text-blue-600">{item.requested}</span>
+                                    {item.requestedTypes && item.requestedTypes.length > 0 && (
+                                      <> · <span className="text-purple-600 border border-purple-200 px-1 py-0.5 rounded ml-1 bg-purple-50">{item.requestedTypes.map(t => t === 'Ko bo' ? 'k bo' : t === 'm6' ? '6' : t === 'm8' ? '8' : t).join(', ')}</span></>
+                                    )}
+                                  </p>
+                                </div>
+                                <div className="flex gap-1">
+                                  <button 
+                                    onClick={() => {
+                                      setProductForm({ mode: 'edit', sku: item.sku, batch: item.batch, id: item.id });
+                                      setFormProductSku(item.sku);
+                                      setFormProductAlloc([...item.allocation]);
+                                      setFormRequestedTypes(item.requestedTypes || []);
+                                      setModal({ type: 'productForm' });
+                                    }}
+                                    className="p-1.5 bg-amber-50 text-amber-600 rounded-lg border border-amber-100"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button 
+                                    onClick={() => {
+                                      setModal({
+                                        type: 'confirm',
+                                        title: "Xoá sản phẩm?",
+                                        msg: `Bạn muốn xoá ${item.name} khỏi danh sách?`,
+                                        onOk: () => {
+                                          updateData(prev => ({
+                                            ticketsB: {
+                                              ...prev.ticketsB,
+                                              [currentDate]: {
+                                                ...ticketB,
+                                                items: ticketB.items.filter(i => !(i.id && item.id ? i.id === item.id : i.sku === item.sku && i.batch === item.batch))
+                                              }
+                                            }
+                                          }));
+                                          setModal(null);
+                                          showToast("Đã xoá sản phẩm");
                                         }
-                                      }));
-                                      setModal(null);
-                                      showToast("Đã xoá sản phẩm");
-                                    }
-                                  });
-                                }}
-                                className="p-1.5 bg-red-50 text-red-600 rounded-lg border border-red-100"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                                      });
+                                    }}
+                                    className="p-1.5 bg-red-50 text-red-600 rounded-lg border border-red-100"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="mt-3 flex flex-wrap gap-1.5">
+                                {destinations.map((d, i) => item.allocation[i] > 0 && (
+                                  <span key={d} className="text-[9px] font-bold px-2 py-0.5 bg-blue-50 text-blue-700 rounded-md border border-blue-100">
+                                    {d}: {item.allocation[i]}
+                                  </span>
+                                ))}
+                              </div>
                             </div>
-                          </div>
-                          <div className="mt-3 flex flex-wrap gap-1.5">
-                            {destinations.map((d, i) => item.allocation[i] > 0 && (
-                              <span key={d} className="text-[9px] font-bold px-2 py-0.5 bg-blue-50 text-blue-700 rounded-md border border-blue-100">
-                                {d}: {item.allocation[i]}
-                              </span>
-                            ))}
-                          </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                    <button 
-                      onClick={() => {
-                        setProductForm({ mode: 'add', batch: parseInt(bk) });
-                        setFormProductSku("");
-                        setFormProductAlloc(new Array(destinations.length).fill(0));
-                        setModal({ type: 'productForm' });
-                      }}
-                      className="w-full py-3 text-xs font-bold text-blue-600 hover:bg-blue-50 transition-colors border-t border-dashed"
-                    >
-                      + Thêm sản phẩm vào Lần {bk}
-                    </button>
+                        <button 
+                          onClick={() => {
+                            setProductForm({ mode: 'add', batch: parseInt(bk) });
+                            setFormProductSku("");
+                            setFormProductAlloc(new Array(destinations.length).fill(0));
+                            setFormRequestedTypes([]);
+                            setModal({ type: 'productForm' });
+                          }}
+                          className="w-full py-3 text-xs font-bold text-blue-600 hover:bg-blue-50 transition-colors border-t border-dashed"
+                        >
+                          + Thêm sản phẩm vào Lần {bk}
+                        </button>
+                      </>
+                    )}
                   </div>
                 );
               });
@@ -2446,6 +2591,7 @@ export default function App() {
                 setProductForm({ mode: 'add', batch: nextBatch });
                 setFormProductSku("");
                 setFormProductAlloc(new Array(destinations.length).fill(0));
+                setFormRequestedTypes([]);
                 setModal({ type: 'productForm' });
               }}
               className="w-full py-4 bg-blue-600 text-white font-bold rounded-2xl shadow-lg shadow-blue-200 flex items-center justify-center gap-2 hover:bg-blue-700 transition-all"
@@ -2497,20 +2643,74 @@ export default function App() {
                 const allDone = photoDone === bItems.length && actualDone === bItems.length;
                 
                 return (
-                  <div key={bk} className="bg-white rounded-2xl border shadow-sm overflow-hidden">
-                    <button 
+                  <div key={bk} className={cn("rounded-2xl border shadow-sm overflow-hidden", bItems.some(i => i.isNvAdd) ? "bg-amber-50/50 border-amber-200" : "bg-white")}>
+                    <div 
                       onClick={() => setCollapsedBatches(prev => ({ ...prev, [bk]: !prev[bk] }))}
-                      className="w-full px-4 py-3 bg-gray-50 flex items-center justify-between border-b"
+                      className={cn("w-full px-4 py-3 flex items-center justify-between border-b cursor-pointer", bItems.some(i => i.isNvAdd) ? "bg-amber-100/50 border-amber-200" : "bg-gray-50")}
                     >
                       <div className="flex items-center gap-3">
                         <ChevronDown className={cn("w-4 h-4 text-gray-400 transition-transform", isCollapsed && "-rotate-90")} />
                         <span className="font-bold text-sm">Lần {bk}</span>
+                        {bItems.some(i => i.isNvAdd) && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700 uppercase">NV Thêm</span>
+                        )}
                         {bItems.some(i => i.deliveries && Object.values(i.deliveries).some(d => d.delivered)) && (
                           <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 text-[9px] font-bold rounded">Từ B</span>
                         )}
                         <span className="text-[10px] text-gray-400 font-medium">· {bItems.length} SP</span>
                       </div>
                       <div className="flex items-center gap-2">
+                        {(() => {
+                          const isReady = photoDone === bItems.length && actualDone === bItems.length && !bItems.some(i => i.actual !== null && i.actual !== i.requested && i.realAllocation === null);
+                          return (
+                            <button 
+                              disabled={!isReady}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const summaryText = bItems.map(it => {
+                                  const shortItemName = it.name.includes(" - ") ? it.name.split(" - ").pop()?.trim() || it.name : it.name;
+                                  const actualQty = it.actual || 0;
+                                  let icon = "✓";
+                                  if (actualQty < it.requested) icon = "🔻";
+                                  else if (actualQty > it.requested) icon = "⬆";
+                                  let txt = `${icon}${shortItemName}: ${actualQty}/${it.requested}`;
+                                  return txt;
+                                }).join("\n");
+                                const totalRequested = bItems.reduce((s, i) => s + i.requested, 0);
+                                const totalActual = bItems.reduce((s, i) => s + (i.actual || 0), 0);
+                                const text = `Chuyển kho Lần ${bk}\n📊 Tổng lấy: ${totalActual}/${totalRequested}\n${summaryText}`;
+                                const webhookId = `DONE-B-${bk}-${currentDate}`.replace(/\s+/g, '-');
+                                triggerWebhook('XÁC_NHẬN_LẤY_HÀNG_B', {
+                                  id: webhookId,
+                                  action: "📦 XÁC NHẬN LẤY HÀNG",
+                                  status: "Hoàn tất lấy",
+                                  date: ticketB.date,
+                                  batch: parseInt(bk),
+                                  totalQty: totalActual,
+                                  items: bItems.map(it => ({
+                                    name: it.name,
+                                    sku: it.sku,
+                                    requested: it.requested,
+                                    actual: it.actual,
+                                    photoUrl: it.photoUrl || undefined
+                                  })),
+                                  zaloMessage: text,
+                                  user: userProfile?.displayName || userProfile?.name || "Nhân viên"
+                                });
+                                showToast("Đã gửi thông báo Zalo!");
+                              }}
+                              className={cn(
+                                "p-1 px-2 py-0.5 rounded-full text-[9px] font-bold flex items-center gap-1 transition-all",
+                                isReady 
+                                  ? "bg-blue-100 text-blue-600 hover:bg-blue-600 hover:text-white" 
+                                  : "bg-gray-100 text-gray-400 cursor-not-allowed"
+                              )}
+                            >
+                              <MessageSquare className="w-3 h-3" />
+                              Gửi Zalo
+                            </button>
+                          );
+                        })()}
                         {bItems.some(i => i.actual !== null && i.actual !== i.requested && i.realAllocation === null) && (
                           <span className="text-[9px] font-bold px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full">
                             Cần phân chia
@@ -2520,10 +2720,10 @@ export default function App() {
                           "text-[9px] font-bold px-2 py-0.5 rounded-full",
                           allDone ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
                         )}>
-                          {allDone ? "Đã lấy đủ" : `${actualDone}/${bItems.length} đã lấy`}
+                          {allDone ? "Đã lấy" : `${actualDone}/${bItems.length} đã lấy`}
                         </span>
                       </div>
-                    </button>
+                    </div>
                     
                     {!isCollapsed && (
                       <div className="p-3 space-y-3">
@@ -2574,8 +2774,8 @@ export default function App() {
                                                 let width = img.width;
                                                 let height = img.height;
                                                 
-                                                // Nén xuống tối đa 1000px để cực kỳ nhẹ
-                                                const maxDim = 1000;
+                                                // Nén xuống tối đa 600px để cực kỳ nhẹ
+                                                const maxDim = 600;
                                                 if (width > height) {
                                                   if (width > maxDim) {
                                                     height *= maxDim / width;
@@ -2603,18 +2803,18 @@ export default function App() {
                                                   } else {
                                                     reject(new Error("Lỗi tạo dữ liệu ảnh nén"));
                                                   }
-                                                }, 'image/jpeg', 0.6); // Giảm xuống 0.6 để cực nhẹ (~150-200KB)
+                                                }, 'image/jpeg', 0.5); // Giảm xuống 0.5 để cực nhẹ (~30-50KB)
                                               };
                                             };
                                           });
 
-                                          // Create a safe path for storage
-                                          const safePath = `photos/${currentDate.replace(/\//g, '-')}`;
-                                          const fileName = `item_${item.sku}_${Date.now()}.jpg`;
-                                          const storageRef = ref(storage, `${safePath}/${fileName}`);
-                                          
-                                          const uploadResult = await uploadBytes(storageRef, compressedBlob);
-                                          const photoUrl = await getDownloadURL(uploadResult.ref);
+                                          // Lấy chuỗi base64 thay vì upload storage (vì lỗi quyền trên Firebase Storage)
+                                          const photoUrl = await new Promise<string>((res, rej) => {
+                                            const reader = new FileReader();
+                                            reader.onloadend = () => res(reader.result as string);
+                                            reader.onerror = () => rej(new Error("Lỗi chuyển đổi ảnh"));
+                                            reader.readAsDataURL(compressedBlob);
+                                          });
                                           
                                           // Thông báo cho n8n để tự động sao lưu sang Google Drive
                                           triggerWebhook('PHOTO_UPLOAD', {
@@ -2622,7 +2822,7 @@ export default function App() {
                                             sku: item.sku,
                                             name: item.name,
                                             batch: item.batch,
-                                            path: storageRef.fullPath
+                                            path: `base64_upload_item_${item.sku}_${Date.now()}.jpg`
                                           });
                                           
                                           // --- End Logic ---
@@ -2632,14 +2832,14 @@ export default function App() {
                                               ...prev.ticketsB,
                                               [currentDate]: {
                                                 ...ticketB,
-                                                items: ticketB.items.map(i => i.sku === item.sku ? { ...i, photoTaken: true, photoUrl } : i)
+                                                items: ticketB.items.map(i => (i.id && item.id ? i.id === item.id : i.sku === item.sku && i.batch === item.batch) ? { ...i, photoTaken: true, photoUrl } : i)
                                               }
                                             }
                                           }));
                                           showToast("Đã lưu ảnh sản phẩm!");
-                                        } catch (err) {
+                                        } catch (err: any) {
                                           console.error(err);
-                                          showToast("Lỗi khi tải ảnh lên!");
+                                          showToast(`Lỗi khi tải ảnh lên: ${err.message || 'Unknown'}`);
                                         }
                                       }}
                                     />
@@ -2670,6 +2870,9 @@ export default function App() {
                                   <h4 className="font-bold text-sm text-gray-900 leading-tight">{item.name}</h4>
                                   <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold tracking-wider">
                                     {item.category}
+                                    {item.requestedTypes && item.requestedTypes.length > 0 && (
+                                      <> · <span className="text-purple-600 border border-purple-200 px-1 py-0.5 rounded ml-1 bg-purple-50">{item.requestedTypes.map(t => t === 'Ko bo' ? 'k bo' : t === 'm6' ? '6' : t === 'm8' ? '8' : t).join(', ')}</span></>
+                                    )}
                                   </p>
                                   <div className="mt-2 flex flex-wrap gap-1">
                                     {destinations.map((d, i) => {
@@ -2706,7 +2909,7 @@ export default function App() {
                                 </div>
                                 <button 
                                   onClick={() => {
-                                    setEditingItem(item.sku);
+                                    setEditingItem({sku: item.sku, batch: item.batch, id: item.id});
                                     setEditActual(item.actual ?? item.requested);
                                     setEditNote(item.note || "");
                                     setModal({ type: 'editActual' });
@@ -2801,100 +3004,113 @@ export default function App() {
                           })}
                         </div>
 
-                        <button 
-                          onClick={() => {
-                            const itemsToUpdate = bItems.filter(i => i.actual !== null && i.actual !== i.requested);
-                            let allMatch = true;
-                            
-                            itemsToUpdate.forEach(item => {
-                              const currentAlloc = reAllocInputs[item.sku] || item.allocation.map(v => v.toString());
-                              const totalAlloc = currentAlloc.reduce((sum, v) => sum + (parseInt(v) || 0), 0);
-                              if (totalAlloc !== item.actual) allMatch = false;
-                            });
-
-                            if (!allMatch) {
-                              showToast("Tổng phân chia mỗi sản phẩm phải bằng số thực tế đã lấy");
-                              return;
-                            }
-
-                            updateData(prev => {
-                              const newItems = ticketB.items.map(item => {
-                                if (item.batch === bNum && item.actual !== null && item.actual !== item.requested) {
-                                  const alloc = (reAllocInputs[item.sku] || item.allocation.map(v => v.toString())).map(v => parseInt(v) || 0);
-                                  return { ...item, realAllocation: alloc };
-                                }
-                                return item;
-                              });
-                              
-                              let nextData = {
-                                ...prev,
-                                ticketsB: {
-                                  ...prev.ticketsB,
-                                  [currentDate]: { ...ticketB, items: newItems }
-                                }
-                              };
-
-                              // Sync to A
-                              const ticketA = prev.ticketsA[currentDate];
-                              if (ticketA) {
-                                let newSendsA = [...ticketA.sends];
-                                const at = new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
-                                const bItems = newItems.filter(i => i.batch === bNum);
-                                const existingSourceBatch = ticketA.sends.find(s => s.source === 'B' && s.sourceBatch === bNum);
-                                const batchToUse = existingSourceBatch ? existingSourceBatch.batch : (Math.max(0, ...ticketA.sends.map(s => s.batch || 1)) + 1);
-
-                                destinations.forEach(dest => {
-                                  const dIdx = destinations.indexOf(dest);
-                                  const itemsForDest: { sku: string, name: string, qty: number }[] = [];
-                                  bItems.forEach(bi => {
-                                    const alloc = bi.realAllocation || bi.allocation;
-                                    if (alloc[dIdx] > 0) itemsForDest.push({ sku: bi.sku, name: bi.name, qty: alloc[dIdx] });
+                        {(() => {
+                          const reallocDoneStatus = bItems.filter(i => i.actual !== null && i.actual !== i.requested).every(i => i.realAllocation !== null);
+                          return !reallocDoneStatus ? (
+                            <>
+                              <button 
+                                onClick={() => {
+                                  const itemsToUpdate = bItems.filter(i => i.actual !== null && i.actual !== i.requested);
+                                  let allMatch = true;
+                                  
+                                  itemsToUpdate.forEach(item => {
+                                    const currentAlloc = reAllocInputs[item.sku] || item.allocation.map(v => v.toString());
+                                    const totalAlloc = currentAlloc.reduce((sum, v) => sum + (parseInt(v) || 0), 0);
+                                    if (totalAlloc !== item.actual) allMatch = false;
                                   });
-                                  if (itemsForDest.length === 0) return;
-                                  const totalQty = itemsForDest.reduce((s, i) => s + i.qty, 0);
-                                  const existingSend = newSendsA.find(s => 
-                                    s.source === 'B' && 
-                                    s.sourceBatch === bNum && 
-                                    (s.workshopIdx === dIdx || s.workshop === dest)
-                                  );
-                                  if (!existingSend) {
-                                    const nextId = Math.max(0, ...newSendsA.map(s => s.id)) + 1;
-                                    newSendsA.push({
-                                      id: nextId, batch: batchToUse, source: 'B', workshop: dest, time: at,
-                                      items: aggregateByCategory(itemsForDest), delivered: false,
-                                      bSourceItems: itemsForDest.map(i => ({ sku: i.sku, name: i.name, qty: i.qty })),
-                                      sourceBatch: bNum,
-                                      workshopIdx: dIdx
-                                    });
-                                  } else if (!existingSend.delivered) {
-                                    existingSend.items = aggregateByCategory(itemsForDest);
-                                    existingSend.bSourceItems = itemsForDest.map(i => ({ sku: i.sku, name: i.name, qty: i.qty }));
-                                    existingSend.workshop = dest;
-                                    existingSend.workshopIdx = dIdx;
+
+                                  if (!allMatch) {
+                                    showToast("Tổng phân chia mỗi sản phẩm phải bằng số thực tế đã lấy");
+                                    return;
                                   }
-                                });
-                                nextData.ticketsA[currentDate] = { ...ticketA, sends: newSendsA };
-                              }
-                              return nextData;
-                            });
-                            showToast("Đã xác nhận phân chia Lần " + bk);
-                          }}
-                          className={cn(
-                            "w-full py-3 font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2",
-                            bItems.filter(i => i.actual !== null && i.actual !== i.requested).every(item => {
-                              const currentAlloc = reAllocInputs[item.sku] || item.allocation.map(v => v.toString());
-                              const totalAlloc = currentAlloc.reduce((sum, v) => sum + (parseInt(v) || 0), 0);
-                              return totalAlloc === item.actual;
-                            }) 
-                              ? "bg-blue-600 text-white shadow-blue-100" 
-                              : "bg-blue-300 text-white cursor-not-allowed"
-                          )}
-                        >
-                          Xác nhận phân chia Lần {bk}
-                        </button>
-                        <p className="text-[9px] text-red-500 font-bold text-center">
-                          Tổng phân chia mỗi sản phẩm phải bằng số thực tế đã lấy
-                        </p>
+
+                                  updateData(prev => {
+                                    const newItems = ticketB.items.map(item => {
+                                      if (item.batch === bNum && item.actual !== null && item.actual !== item.requested) {
+                                        const alloc = (reAllocInputs[item.sku] || item.allocation.map(v => v.toString())).map(v => parseInt(v) || 0);
+                                        return { ...item, realAllocation: alloc };
+                                      }
+                                      return item;
+                                    });
+                                    
+                                    let nextData = {
+                                      ...prev,
+                                      ticketsB: {
+                                        ...prev.ticketsB,
+                                        [currentDate]: { ...ticketB, items: newItems }
+                                      }
+                                    };
+
+                                    // Sync to A
+                                    const ticketA = prev.ticketsA[currentDate];
+                                    if (ticketA) {
+                                      let newSendsA = [...ticketA.sends];
+                                      const at = new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+                                      const bItemsUpdated = newItems.filter(i => i.batch === bNum);
+                                      const existingSourceBatch = ticketA.sends.find(s => s.source === 'B' && s.sourceBatch === bNum);
+                                      const batchToUse = existingSourceBatch ? existingSourceBatch.batch : (Math.max(0, ...ticketA.sends.map(s => s.batch || 1)) + 1);
+
+                                      // Xoá phiếu chưa giao cũ để tạo lại đúng phân chia mới
+                                      newSendsA = newSendsA.filter(s => !(s.source === 'B' && s.sourceBatch === bNum && !s.delivered));
+
+                                      destinations.forEach(dest => {
+                                        const dIdx = destinations.indexOf(dest);
+                                        const itemsForDest: { sku: string, name: string, qty: number }[] = [];
+                                        bItemsUpdated.forEach(bi => {
+                                          const alloc = bi.realAllocation || bi.allocation;
+                                          if (alloc[dIdx] > 0) itemsForDest.push({ sku: bi.sku, name: bi.name, qty: alloc[dIdx] });
+                                        });
+                                        if (itemsForDest.length === 0) return;
+                                        
+                                        const nextId = Math.max(0, ...newSendsA.map(s => s.id), 0) + 1;
+                                        newSendsA.push({
+                                          id: nextId, batch: batchToUse, source: 'B', workshop: dest, time: at,
+                                          items: aggregateByCategory(itemsForDest), delivered: false,
+                                          bSourceItems: itemsForDest.map(i => ({ sku: i.sku, name: i.name, qty: i.qty })),
+                                          sourceBatch: bNum,
+                                          workshopIdx: dIdx
+                                        });
+                                      });
+                                      nextData.ticketsA[currentDate] = { ...ticketA, sends: newSendsA };
+                                    }
+                                    return nextData;
+                                  });
+                                  showToast("Đã xác nhận phân chia Lần " + bk);
+                                }}
+                                className={cn(
+                                  "w-full py-3 font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2",
+                                  bItems.filter(i => i.actual !== null && i.actual !== i.requested).every(item => {
+                                    const currentAlloc = reAllocInputs[item.sku] || item.allocation.map(v => v.toString());
+                                    const totalAlloc = currentAlloc.reduce((sum, v) => sum + (parseInt(v) || 0), 0);
+                                    return totalAlloc === item.actual;
+                                  }) 
+                                    ? "bg-blue-600 text-white shadow-blue-100" 
+                                    : "bg-blue-300 text-white cursor-not-allowed"
+                                )}
+                              >
+                                Xác nhận phân chia Lần {bk}
+                              </button>
+                              <p className="text-[9px] text-red-500 font-bold text-center mt-2">
+                                Tổng phân chia mỗi sản phẩm phải bằng số thực tế đã lấy
+                              </p>
+                            </>
+                          ) : (
+                            <div className="flex gap-2 w-full mt-2">
+                              <button disabled className="flex-1 py-3 bg-gray-100 text-gray-400 font-bold rounded-xl cursor-not-allowed border border-gray-200">
+                                Đã xác nhận
+                              </button>
+                              <button 
+                                onClick={() => {
+                                  setCancelSplitBatch(bNum);
+                                  setModal({ type: 'cancelSplitConfirmation' });
+                                }} 
+                                className="px-6 py-3 bg-red-50 text-red-600 font-bold rounded-xl border border-red-100 hover:bg-red-100 transition-colors"
+                              >
+                                Huỷ
+                              </button>
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
 
@@ -2980,10 +3196,40 @@ export default function App() {
                         );
                       })()
                     )}
+
+                    {bItems.some(i => i.isNvAdd) && (
+                      <button 
+                        onClick={() => {
+                          setProductForm({ mode: 'add', batch: parseInt(bk), isNvAdd: true });
+                          setFormProductSku("");
+                          setFormProductAlloc(new Array(destinations.length).fill(0));
+                          setFormRequestedTypes([]);
+                          setModal({ type: 'productForm' });
+                        }}
+                        className="w-full mt-4 py-3 text-xs font-bold text-blue-600 border border-blue-200 border-dashed rounded-xl hover:bg-blue-50 transition-colors"
+                      >
+                        + Thêm sản phẩm vào Lần {bk}
+                      </button>
+                    )}
                   </div>
                 );
               });
             })()}
+
+            <button 
+              onClick={() => {
+                const nextBatch = Math.max(0, ...ticketB.items.map(i => i.batch || 1)) + 1;
+                setProductForm({ mode: 'add', batch: nextBatch, isNvAdd: true });
+                setFormProductSku("");
+                setFormProductAlloc(new Array(destinations.length).fill(0));
+                setFormRequestedTypes([]);
+                setModal({ type: 'productForm' });
+              }}
+              className="w-full py-4 bg-blue-600 text-white font-bold rounded-2xl shadow-lg shadow-blue-200 flex items-center justify-center gap-2 hover:bg-blue-700 transition-all"
+            >
+              <Plus className="w-5 h-5" />
+              <span>Tạo lượt lấy mới</span>
+            </button>
           </div>
         )}
         {tab === 'PROD' && (
@@ -2995,6 +3241,16 @@ export default function App() {
               </div>
               {isAdmin && (
                 <div className="flex gap-2">
+                  <button 
+                    onClick={() => {
+                      setNewCatalogProduct({sku: `p-${Date.now()}`, name: '', category: 'Vỏ chăn'});
+                      setModal({ type: 'addCatalogProduct' });
+                    }}
+                    className="cursor-pointer bg-green-50 text-green-600 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-green-100 transition-colors"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Thêm thủ công
+                  </button>
                   <label className="cursor-pointer bg-blue-50 text-blue-600 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-blue-100 transition-colors">
                     <Plus className="w-4 h-4" />
                     Import Excel
@@ -3863,13 +4119,18 @@ export default function App() {
             <button onClick={() => setModal(null)} className="flex-1 py-3 bg-white border text-gray-600 font-bold rounded-xl">Huỷ</button>
             <button 
               onClick={() => {
-                const item = ticketB.items.find(i => i.sku === editingItem);
+                const item = ticketB.items.find(i => (i.id && editingItem.id ? i.id === editingItem.id : i.sku === editingItem.sku && i.batch === editingItem.batch));
                 if (!item) return;
                 if (editActual !== item.requested && !editNote) {
                   showToast("Vui lòng chọn lý do lệch");
                   return;
                 }
-                const nextItems = ticketB.items.map(i => i.sku === editingItem ? { ...i, actual: editActual, note: editNote } : i);
+                const nextItems = ticketB.items.map(i => {
+                  if (i.id && editingItem.id ? i.id === editingItem.id : i.sku === editingItem.sku && i.batch === editingItem.batch) {
+                    return { ...i, actual: editActual, note: editNote, realAllocation: null };
+                  }
+                  return i;
+                });
                 
                 updateData(prev => {
                   const updatedB = {
@@ -3890,14 +4151,17 @@ export default function App() {
                     }
                   };
 
+                  const ticketA = prev.ticketsA[currentDate];
+
                   if (step1Done && (!needsRealloc || reallocDone)) {
                     // Sync to A
-                    const ticketA = prev.ticketsA[currentDate];
                     if (ticketA) {
                       let newSendsA = [...ticketA.sends];
                       const at = new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
                       const existingSourceBatch = ticketA.sends.find(s => s.source === 'B' && s.sourceBatch === bBatchNum);
                       const batchToUse = existingSourceBatch ? existingSourceBatch.batch : (Math.max(0, ...ticketA.sends.map(s => s.batch || 1)) + 1);
+
+                      newSendsA = newSendsA.filter(s => !(s.source === 'B' && s.sourceBatch === bBatchNum && !s.delivered)); // Clear un-delivered to avoid orphaned drops to 0
 
                       destinations.forEach((dest, dIdx) => {
                         const itemsForDest: { sku: string, name: string, qty: number }[] = [];
@@ -3906,29 +4170,30 @@ export default function App() {
                           if (alloc[dIdx] > 0) itemsForDest.push({ sku: bi.sku, name: bi.name, qty: alloc[dIdx] });
                         });
                         if (itemsForDest.length === 0) return;
-                        const totalQty = itemsForDest.reduce((s, i) => s + i.qty, 0);
-                        const existingSend = newSendsA.find(s => 
-                          s.source === 'B' && 
-                          s.sourceBatch === bBatchNum && 
-                          (s.workshopIdx === dIdx || s.workshop === dest)
-                        );
-                        if (!existingSend) {
-                          const nextId = Math.max(0, ...newSendsA.map(s => s.id)) + 1;
-                          newSendsA.push({
-                            id: nextId, batch: batchToUse, source: 'B', workshop: dest, time: at,
-                            items: aggregateByCategory(itemsForDest), delivered: false,
-                            bSourceItems: itemsForDest.map(i => ({ sku: i.sku, name: i.name, qty: i.qty })),
-                            sourceBatch: bBatchNum,
-                            workshopIdx: dIdx
-                          });
-                        } else if (!existingSend.delivered) {
-                          existingSend.items = aggregateByCategory(itemsForDest);
-                          existingSend.bSourceItems = itemsForDest.map(i => ({ sku: i.sku, name: i.name, qty: i.qty }));
-                          existingSend.workshop = dest;
-                          existingSend.workshopIdx = dIdx;
-                        }
+                        
+                        const nextId = Math.max(0, ...newSendsA.map(s => s.id), 0) + 1;
+                        newSendsA.push({
+                          id: nextId, batch: batchToUse, source: 'B', workshop: dest, time: at,
+                          items: aggregateByCategory(itemsForDest), delivered: false,
+                          bSourceItems: itemsForDest.map(i => ({ sku: i.sku, name: i.name, qty: i.qty })),
+                          sourceBatch: bBatchNum,
+                          workshopIdx: dIdx
+                        });
                       });
-                      nextData.ticketsA[currentDate] = { ...ticketA, sends: newSendsA };
+                      nextData.ticketsA = {
+                        ...prev.ticketsA,
+                        [currentDate]: { ...ticketA, sends: newSendsA }
+                      };
+                    }
+                  } else {
+                    // Cần phân chia lại (realloc)
+                    // Xoá các phiếu giao cũ chưa được xác nhận giao để chờ phân chia
+                    if (ticketA) {
+                      let newSendsA = ticketA.sends.filter(s => !(s.source === 'B' && s.sourceBatch === bBatchNum && !s.delivered));
+                      nextData.ticketsA = {
+                        ...prev.ticketsA,
+                        [currentDate]: { ...ticketA, sends: newSendsA }
+                      };
                     }
                   }
                   return nextData;
@@ -3944,7 +4209,7 @@ export default function App() {
         }
       >
         {editingItem && (() => {
-          const item = ticketB.items.find(i => i.sku === editingItem);
+          const item = ticketB.items.find(i => (i.id && editingItem.id ? i.id === editingItem.id : i.sku === editingItem.sku && i.batch === editingItem.batch));
           if (!item) return null;
           const isLech = editActual !== item.requested;
           return (
@@ -4022,10 +4287,11 @@ export default function App() {
                       ...prev.ticketsB,
                       [currentDate]: {
                         ...ticketB,
-                        items: ticketB.items.map(i => i.sku === productForm.sku ? {
+                        items: ticketB.items.map(i => (i.id && productForm.id ? i.id === productForm.id : i.sku === productForm.sku && i.batch === productForm.batch) ? {
                           ...i,
                           allocation: [...formProductAlloc],
-                          requested: total
+                          requested: total,
+                          requestedTypes: [...formRequestedTypes]
                         } : i)
                       }
                     }
@@ -4038,6 +4304,7 @@ export default function App() {
                     return;
                   }
                   const newItem: TicketBItem = {
+                    id: Math.random().toString(36).substr(2, 9),
                     sku: product.sku,
                     batch: productForm?.batch || 1,
                     name: product.name,
@@ -4048,7 +4315,9 @@ export default function App() {
                     actual: null,
                     photoTaken: false,
                     note: "",
-                    deliveries: {}
+                    deliveries: {},
+                    requestedTypes: [...formRequestedTypes],
+                    isNvAdd: productForm?.isNvAdd
                   };
                   // Initialize deliveries
                   destinations.forEach((d, i) => {
@@ -4157,6 +4426,30 @@ export default function App() {
               )}
             </div>
           )}
+
+          <div className="space-y-3">
+            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider ml-1">Loại hàng yêu cầu</label>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { val: 'Ko bo', label: 'k bo' },
+                { val: 'm6', label: '6' },
+                { val: 'm8', label: '8' }
+              ].map(type => (
+                <label key={type.val} className="flex items-center gap-2 bg-gray-50 border px-3 py-2 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={formRequestedTypes.includes(type.val)}
+                    onChange={(e) => {
+                      if (e.target.checked) setFormRequestedTypes([...formRequestedTypes, type.val]);
+                      else setFormRequestedTypes(formRequestedTypes.filter(t => t !== type.val));
+                    }}
+                    className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                  />
+                  <span className="text-sm font-bold text-gray-700">{type.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
 
           <div className="space-y-3">
             <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider ml-1">Phân chia đích đến</label>
@@ -4414,6 +4707,147 @@ export default function App() {
           {modal?.msg}
         </p>
       </Modal>
+
+      <Modal 
+        isOpen={modal?.type === 'cancelSplitConfirmation'} 
+        onClose={() => {
+          setModal(null);
+          setCancelSplitBatch(null);
+        }}
+        title="Xác nhận huỷ phân chia"
+        footer={
+          <>
+            <button 
+              onClick={() => {
+                setModal(null);
+                setCancelSplitBatch(null);
+              }} 
+              className="flex-1 py-3 bg-white border text-gray-600 font-bold rounded-xl"
+            >
+              Quay lại
+            </button>
+            <button 
+              onClick={() => {
+                if (cancelSplitBatch === null) return;
+                
+                updateData(prev => {
+                  const bNum = cancelSplitBatch;
+                  const currentTicketB = prev.ticketsB[currentDate] || emptyTicketB(currentDate);
+
+                  // 1. Reset realAllocation cho lượt này
+                  const newItems = currentTicketB.items.map(item => {
+                    if (item.batch === bNum) {
+                      return { ...item, realAllocation: null };
+                    }
+                    return item;
+                  });
+
+                  let nextData = {
+                    ...prev,
+                    ticketsB: {
+                      ...prev.ticketsB,
+                      [currentDate]: { ...currentTicketB, items: newItems }
+                    }
+                  };
+
+                  // 2. Xoá các Sends trong TicketA chưa được giao của lợt này
+                  const currentTicketA = prev.ticketsA[currentDate] || emptyTicketA(currentDate);
+                  let newSendsA = [...currentTicketA.sends];
+                  newSendsA = newSendsA.filter(s => !(s.source === 'B' && s.sourceBatch === bNum && !s.delivered));
+
+                  nextData.ticketsA = {
+                    ...prev.ticketsA,
+                    [currentDate]: { ...currentTicketA, sends: newSendsA }
+                  };
+
+                  return nextData;
+                });
+                
+                showToast("Đã huỷ phân chia");
+                setModal(null);
+                setCancelSplitBatch(null);
+              }}
+              className="flex-1 py-3 bg-red-600 text-white font-bold rounded-xl shadow-lg shadow-red-200"
+            >
+              Đồng ý huỷ
+            </button>
+          </>
+        }
+      >
+        <p className="text-sm text-gray-600 leading-relaxed text-center py-4">
+          Bạn có chắc muốn huỷ phân chia Lần {cancelSplitBatch}?
+          <br /><br />
+          Các mục đang chờ xác nhận giao cho xưởng của lần này sẽ tự động bị huỷ để bạn có thể sửa lại số lượng phân chia.
+        </p>
+      </Modal>
+
+      <Modal 
+        isOpen={modal?.type === 'addCatalogProduct'} 
+        onClose={() => setModal(null)}
+        title="Thêm sản phẩm mới"
+        footer={
+          <>
+            <button 
+              onClick={() => setModal(null)} 
+              className="flex-1 py-3 bg-white border text-gray-600 font-bold rounded-xl"
+            >
+              Huỷ
+            </button>
+            <button 
+              onClick={() => {
+                if (!newCatalogProduct.name) {
+                  showToast("Vui lòng nhập tên sản phẩm");
+                  return;
+                }
+                const newProd: Product = { ...newCatalogProduct, sku: newCatalogProduct.sku || `p-${Date.now()}` };
+                updateData(prev => ({ products: [...prev.products, newProd] }));
+                showToast("Đã thêm sản phẩm!");
+                setModal(null);
+              }}
+              className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200"
+            >
+              Thêm sản phẩm
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4 py-2">
+          <div>
+            <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">Mã tham chiếu (SKU) <span className="text-[9px] text-gray-400 font-normal">(Tự tạo nếu trống)</span></label>
+            <input 
+              type="text"
+              value={newCatalogProduct.sku}
+              onChange={(e) => setNewCatalogProduct(prev => ({ ...prev, sku: e.target.value }))}
+              placeholder={`p-${Date.now()}`}
+              className="w-full px-4 py-3 bg-gray-50 border rounded-xl text-sm focus:border-blue-500 focus:bg-white transition-all outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">Tên sản phẩm *</label>
+            <input 
+              type="text"
+              value={newCatalogProduct.name}
+              onChange={(e) => setNewCatalogProduct(prev => ({ ...prev, name: e.target.value }))}
+              placeholder="Nhập tên sản phẩm..."
+              className="w-full px-4 py-3 bg-gray-50 border rounded-xl text-sm focus:border-blue-500 focus:bg-white transition-all outline-none"
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">Danh mục</label>
+            <select
+              value={newCatalogProduct.category}
+              onChange={(e) => setNewCatalogProduct(prev => ({ ...prev, category: e.target.value }))}
+              className="w-full px-4 py-3 bg-gray-50 border rounded-xl text-sm focus:border-blue-500 focus:bg-white transition-all outline-none appearance-none"
+            >
+              {['Vỏ chăn', 'Chăn trần', 'Ga gối', 'Ga lẻ'].map(t => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </Modal>
+
     </div>
   );
 }

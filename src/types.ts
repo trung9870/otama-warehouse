@@ -50,6 +50,7 @@ export interface DeliveryInfo {
 }
 
 export interface TicketBItem {
+  id?: string;
   sku: string;
   batch: number;
   name: string;
@@ -63,6 +64,8 @@ export interface TicketBItem {
   photoUrl?: string;
   note: string;
   deliveries: Record<string, DeliveryInfo>;
+  requestedTypes?: string[];
+  isNvAdd?: boolean;
 }
 
 export interface TicketB {
