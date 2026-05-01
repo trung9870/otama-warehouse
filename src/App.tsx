@@ -607,21 +607,42 @@ export default function App() {
         try {
           if (nextPartial.ticketsA) {
             for (const date in nextPartial.ticketsA) {
-              await setDoc(doc(db, 'ticketsA', date), nextPartial.ticketsA[date]);
+              if (JSON.stringify(prev.ticketsA[date]) !== JSON.stringify(nextPartial.ticketsA[date])) {
+                await setDoc(doc(db, 'ticketsA', date), nextPartial.ticketsA[date]);
+              }
             }
           }
           if (nextPartial.ticketsB) {
             for (const date in nextPartial.ticketsB) {
-              await setDoc(doc(db, 'ticketsB', date), nextPartial.ticketsB[date]);
+              if (JSON.stringify(prev.ticketsB[date]) !== JSON.stringify(nextPartial.ticketsB[date])) {
+                await setDoc(doc(db, 'ticketsB', date), nextPartial.ticketsB[date]);
+              }
             }
           }
           if (nextPartial.products) {
-            // Batch update for products
             const batch = writeBatch(db);
+            let hasChanges = false;
+            
+            // Handle updates and adds
             nextPartial.products.forEach(p => {
-              batch.set(doc(db, 'products', p.sku), p);
+              const oldProd = prev.products.find(op => op.sku === p.sku);
+              if (JSON.stringify(oldProd) !== JSON.stringify(p)) {
+                batch.set(doc(db, 'products', p.sku), p);
+                hasChanges = true;
+              }
             });
-            await batch.commit();
+            
+            // Handle deletes
+            prev.products.forEach(op => {
+              if (!nextPartial.products!.find(p => p.sku === op.sku)) {
+                batch.delete(doc(db, 'products', op.sku));
+                hasChanges = true;
+              }
+            });
+            
+            if (hasChanges) {
+              await batch.commit();
+            }
           }
         } catch (error) {
           handleFirestoreError(error, OperationType.WRITE, 'multiple');
